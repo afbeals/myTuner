@@ -1,0 +1,60 @@
+# myTuner — deployment scaffold for Unraid.
+#
+# Replace every /mnt/user/... path below with your actual Unraid share paths before
+# deploying. See INVESTIGATION.md ("Unraid mount strategy") for why these must be
+# /mnt/user/<share>/... paths, never /mnt/diskN/... or /mnt/user0/....
+#
+# Copy .env.example to .env and fill in real values before running — .env is
+# git-ignored so secrets never get committed.
+
+services:
+  ersatztv:
+    # Confirmed from ErsatzTV's own .github/workflows/docker.yml — this is the actual
+    # published image, not a guess.
+    image: ghcr.io/ersatztv/legacy:latest
+    container_name: ersatztv
+    restart: unless-stopped
+    ports:
+      - "8409:8409"
+    volumes:
+      - ${ERSATZTV_CONFIG_PATH:-/mnt/user/appdata/ersatztv}:/config
+      # Shared library content — read-only. ErsatzTV only ever reads video files and
+      # the chapter sidecars; it never needs to write into your media folders.
+      - ${SHARED_LIBRARY_PATH:?set SHARED_LIBRARY_PATH in .env}:/media/shared:ro
+      # Private-channel content — also read-only for ErsatzTV.
+      - ${PRIVATE_LIBRARY_PATH:?set PRIVATE_LIBRARY_PATH in .env}:/media/private:ro
+    tmpfs:
+      # Matches ErsatzTV's own example compose file (docker/docker-compose.yml in
+      # ErsatzTV/legacy) — keeps transient transcode scratch files off the array disks.
+      - /transcode
+
+  private-channel-proxy:
+    image: caddy:2-alpine
+    container_name: private-channel-proxy
+    restart: unless-stopped
+    depends_on:
+      - ersatztv
+    ports:
+      - "${PROXY_PORT:-8443}:${PROXY_PORT:-8443}"
+    environment:
+      - PROXY_PORT=${PROXY_PORT:-8443}
+      - PRIVATE_CHANNEL_TOKEN=${PRIVATE_CHANNEL_TOKEN:?set PRIVATE_CHANNEL_TOKEN in .env}
+      - ERSATZTV_UPSTREAM=http://ersatztv:8409
+    volumes:
+      - ./private-channel-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+
+  # Not a long-running service — run on demand (see below) or on a cron schedule.
+  # Kept here under a profile so `docker compose up` doesn't start it automatically.
+  chapter-generator:
+    build: ./sidecar-generator
+    container_name: chapter-generator
+    profiles: ["tools"]
+    volumes:
+      # Read-write: this is the one component that writes the sidecar .xml files.
+      - ${SHARED_LIBRARY_PATH:?set SHARED_LIBRARY_PATH in .env}:/media/shared
+    # Example manual run (adjust --mode/--breaks/etc. per INVESTIGATION.md):
+    #   docker compose run --rm chapter-generator \
+    #     /media/shared --mode random-percent --min-percent 20 --max-percent 80 \
+    #     --ersatztv-url http://ersatztv:8409 --library-id 1 \
+    #     --ersatztv-api-key "$ERSATZTV_API_KEY"
+    command: ["--help"]

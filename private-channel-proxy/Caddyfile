@@ -1,0 +1,42 @@
+# Reverse proxy that gates access to the private channel's ErsatzTV stream behind a
+# secret token embedded in the URL path, since Plex's Live TV access can't be scoped to
+# one person (see INVESTIGATION.md). Anything not carrying the exact token is rejected
+# without revealing a channel exists at all.
+#
+# Client-facing URL (paste this whole thing into TiviMate/VLC once):
+#   https://<this-host>:{$PROXY_PORT}/private/{$PRIVATE_CHANNEL_TOKEN}/iptv/channel/{$PRIVATE_CHANNEL_NUMBER}.m3u8
+#
+# Required environment variables (set in docker-compose.yml, not committed here):
+#   PRIVATE_CHANNEL_TOKEN  - long random secret (e.g. `openssl rand -hex 32`)
+#   ERSATZTV_UPSTREAM      - e.g. http://ersatztv:8409 (ErsatzTV's address on the
+#                            Docker network)
+#   PROXY_PORT             - port this proxy listens on, e.g. 8443
+
+{
+	auto_https off
+}
+
+:{$PROXY_PORT} {
+	# The whole ErsatzTV /iptv/ path space is gated and proxied under this prefix,
+	# not just the single .m3u8 entry point. HLS playlists reference further segment
+	# files, and if ErsatzTV's manifest uses relative or root-relative paths, they'll
+	# still resolve against this proxy's origin from the player's perspective — so
+	# gating the whole /iptv/ tree (rather than one file) keeps those follow-up
+	# requests behind the token too.
+	#
+	# NOT YET VERIFIED: whether ErsatzTV ever emits fully-qualified URLs (scheme+host)
+	# pointing directly at itself inside the manifest. If it does, a player would
+	# bypass this proxy for those requests, and the channel would only stay private if
+	# ErsatzTV's own address isn't independently reachable from outside. Confirm this
+	# during the live functional test (INVESTIGATION.md).
+	@authorized path /private/{$PRIVATE_CHANNEL_TOKEN}/iptv/*
+
+	handle @authorized {
+		uri strip_prefix /private/{$PRIVATE_CHANNEL_TOKEN}
+		reverse_proxy {$ERSATZTV_UPSTREAM}
+	}
+
+	handle {
+		respond 404
+	}
+}
