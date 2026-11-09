@@ -1,6 +1,8 @@
+> Historical Plex/ErsatzTV POC. Use [the standalone deployment guide](docs/DEPLOYMENT.md) for the current application. Commands below are archival Plex/ErsatzTV examples, not standalone instructions. Do not use the legacy chapter writer against the read-only standalone library.
+
 # ErsatzTV setup walkthrough
 
-Step-by-step for configuring ErsatzTV itself once it's running (`docker compose up -d`
+Step-by-step for configuring ErsatzTV itself once it's running (`docker compose -f docker-compose.legacy.yml up -d`
 or the Unraid Community Applications install — either way, its web UI is at
 `http://<host>:8409`).
 
@@ -18,7 +20,7 @@ Schedule / Playout) still will.
 Go to **Media → Libraries** (`/media/sources/local`) → **Add** (`/media/sources/local/add`).
 
 - One library pointed at your shared content (the `/media/shared` mount from
-  `docker-compose.yml`) — this is your existing Shows/Movies structure, read as-is.
+  `docker-compose.legacy.yml`) — this is your existing Shows/Movies structure, read as-is.
 - A second, separate library pointed at `/media/private` — the private channel's
   content.
 - After adding, ErsatzTV scans automatically. Note the **library id** shown for the
@@ -79,7 +81,7 @@ generator against it before relying on any Mid-Roll filler preset — it has not
 interrupt at until sidecars exist:
 
 ```
-docker compose run --rm chapter-generator /media/shared --mode random-percent \
+docker compose -f docker-compose.legacy.yml run --rm chapter-generator /media/shared --mode random-percent \
   --ersatztv-url http://ersatztv:8409 --library-id <id> --ersatztv-api-key "$ERSATZTV_API_KEY"
 ```
 

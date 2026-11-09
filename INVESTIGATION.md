@@ -1,3 +1,5 @@
+> Historical Plex/ErsatzTV POC. Superseded by [the standalone plan](docs/MYTUNER_PLAN.md). Do not use the legacy chapter writer against the read-only standalone library.
+
 # myTuner — Feasibility Investigation
 
 Personal "TV network" simulator for home/coworker use. This file tracks the investigation

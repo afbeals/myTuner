@@ -2,3 +2,45 @@
 __pycache__/
 *.pyc
 .claude/settings.local.json
+
+# Standalone runtime, dependencies and generated test artifacts
+node_modules/
+dist/
+coverage/
+.data/
+data/
+docker-data/
+generated/
+.cache/
+artifacts/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+.env.*
+!.env.example
+!.env.legacy.example
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.m4v
+*.ts.video
+*.gif
+
+# Local encryption keys and disposable playback cache
+*.key
+cache/
+
+# Browser/native build and test outputs
+web-dist/
+playwright-report/
+test-results/
+android/.gradle/
+android/**/build/
+android/local.properties
+*.apk
+*.aab
+*.jks
+*.keystore

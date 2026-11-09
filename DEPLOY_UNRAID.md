@@ -1,3 +1,5 @@
+> Historical Plex/ErsatzTV POC. Use [the standalone deployment guide](docs/DEPLOYMENT.md) for the current application; the commands below are archived and are not standalone setup instructions. Do not use the legacy chapter writer against the read-only standalone library.
+
 # Deploying on Unraid
 
 Unraid doesn't run a plain `docker-compose.yml` out of the box the way a normal Linux
@@ -14,13 +16,13 @@ one-time Unraid setting, done before any container exists.
 
 ## 2. Running the stack — two options
 
-### Option A — Docker Compose Manager plugin (matches this repo's `docker-compose.yml` directly)
+### Option A — Docker Compose Manager plugin (matches this repo's `docker-compose.legacy.yml` directly)
 
 1. **Apps** tab → search **"Docker Compose Manager"** → Install (from Community
    Applications; needs Unraid 6.10+, Docker already enabled).
 2. A **Compose** section appears at the bottom of the **Docker** tab. Add a new stack,
-   paste in this repo's `docker-compose.yml`, and set up its `.env` values (copy
-   `.env.example`, fill in your real share paths and a generated token — see `README.md`).
+   paste in this repo's `docker-compose.legacy.yml`, and set up its `.env` values (copy
+   `.env.legacy.example`, fill in your real share paths and a generated token — see `README.md`).
 3. Click **Compose Up**. This starts `ersatztv` and `private-channel-proxy`;
    `chapter-generator` stays stopped since it's under the `tools` profile (not meant to
    run continuously) — start it manually (or via a scheduled Compose run) when you want
@@ -34,7 +36,7 @@ container:
 - **ErsatzTV**: use its existing **Community Applications** template instead of our
   compose service for this one — **Apps** tab → search **"ersatztv"** → Install. CA
   already wires up the port (8409) and a WebUI link for you. Point its volume mappings
-  at your real share paths (same ones as `docker-compose.yml`'s `SHARED_LIBRARY_PATH` /
+  at your real share paths (same ones as `docker-compose.legacy.yml`'s `SHARED_LIBRARY_PATH` /
   `PRIVATE_LIBRARY_PATH`, mounted **read-only**).
 - **private-channel-proxy**: **Docker** tab → **Add Container** (bottom of the page,
   not from CA — this one has no template):
@@ -71,7 +73,7 @@ hunt for — once running:
   TiviMate/VLC, not something you browse to): `https://<unraid-server-ip>:8443/private/<PRIVATE_CHANNEL_TOKEN>/iptv/channel/<channel-number>.m3u8`.
 
 If `ERSATZTV_UPSTREAM` is set to `http://ersatztv:8409` (a Docker Compose service name,
-as in `docker-compose.yml`), that only resolves when both containers are on the *same*
+as in `docker-compose.legacy.yml`), that only resolves when both containers are on the *same*
 Compose-managed network (Option A). Under Option B, where each container is added
 independently, use the Unraid server's real LAN IP instead:
 `ERSATZTV_UPSTREAM=http://<unraid-server-ip>:8409`.
