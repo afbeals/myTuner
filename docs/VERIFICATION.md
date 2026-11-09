@@ -6,7 +6,7 @@
 - Node 24.13.0, npm 11.6.2; system FFmpeg/ffprobe available.
 - Tests use real SQLite, HTTP injection/loopback sockets, temporary files and runtime-generated synthetic media. No personal library or credentials were used.
 - Docker is unavailable on this Mac. The owner confirmed Docker Desktop is already installed on Windows; acceptance will use that existing installation. No actual Windows containers, Unraid, installed Sonarr/Radarr, Bravia or Fire TV environment was accessed.
-- No GitHub token was read; no commit, push, PR or image publication was performed. Work remains local.
+- The local verification checkpoint used no GitHub credential or publication. The subsequent authorized feature-branch commit/push and draft PR are recorded below; no image publication or deployment was performed.
 - Figma designs are owner-approved. Version 0.2.0 implements the browser manager/player and native TV POC; current local results are below. Earlier foundation/documentation sections are historical checkpoints.
 
 ## Current handoff — 2026-11-08
@@ -29,6 +29,12 @@ No new host software/toolchain component was installed. Original video/NFO/capti
 [The state inventory](UI_STATE_AUDIT.md) and [local acceptance](LOCAL_ACCEPTANCE.md) define the tested scope. [Differed](differed.md) covers remaining emulator work, exact TV models/OS, the owner’s already-installed Windows Docker Desktop, Unraid/providers/mounts, representative files, human/physical accessibility and six-hour/overnight acceptance. Final formatting, links/tables, eligible-file hygiene and shutdown are recorded in the closing note for this checkpoint.
 
 Final handoff hygiene: project-wide Prettier, both native-harness JavaScript syntax checks and `git diff --check` pass. The documentation audit reports **41 Markdown files, 626 local links, 87 section links, 91 tables and all 48 proposal IDs**, with zero errors. The eligible-untracked audit checks **328 files**, including 70 browser and 30 native PNG baselines, with no original media/captions/NFO, databases, APKs, signing keys or runtime/build directories eligible for Git. The emulator and its test-owned ADB daemon are stopped; test ports 8786/8787/8789/8790/8791 are closed. Demo API 8788 and Vite 5173 remain running with their data preserved. Remaining emulator checks were not resumed.
+
+## Draft PR publication and initial CI — 2026-11-08
+
+The owner authorized committing and pushing the personal repository. Initial implementation commit `472afb9` was pushed to `feature/standalone-foundation` in `afbeals/myTuner`, and [draft PR #2](https://github.com/afbeals/myTuner/pull/2) targets `main`. The working tree was clean after the initial commit. The credential stayed outside Git and command output.
+
+The first remote Android job stopped during SDK setup because `android-actions/setup-android@v3` defaults to the retired `tools` package. The workflow now explicitly requests `platform-tools`, `platforms;android-35` and `build-tools;35.0.0`, matching the project’s compile SDK. This change affects hosted CI only; no additional host software or emulator was installed or started. The existing local unit/build/lint results remain scoped evidence, and [the PR checks](https://github.com/afbeals/myTuner/pull/2/checks) provide current remote status. A complete passing remote run is not claimed here.
 
 ## Historical: nested browser editor audit — 2026-11-08
 
