@@ -67,7 +67,7 @@ Physical display/text readability, actual spoken feedback, Fire accessibility be
 
 ## Repeating the checks
 
-From the repository root, run `npm run build` before starting fixtures. Then use `npm run test:coverage` and `npm run test:ui`; the latter starts/stops ports8787,8786 and 8791. Keep demo 8788 and Vite 5173 alone. Never regenerate hashed browser assets while a fixture is serving its cached HTML.
+From the repository root, run `npm run build` before starting fixtures. Then use `npm run test:coverage` and `npm run test:ui`; the latter starts/stops ports 8787, 8786, 8791 and 8792. Port 8792 is the isolated long-program external subtitle fixture; other browser fixtures keep their original durations. Keep demo 8788 and Vite 5173 alone. Never regenerate hashed browser assets while a fixture is serving its cached HTML.
 
 Native build/preparation, exact emulator commands, isolated fixture8790/fault proxy8789 and cleanup are in [Development](DEVELOPMENT.md). Native full, tracks and accessibility modes each need a fresh synthetic fixture and the current installed APK. Stop owned fixtures and the emulator after the checks. No runtime media/database, APK, debug signing key or test report belongs in Git; reviewed screenshot baselines are synthetic PNG files only.
 

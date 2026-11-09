@@ -9,6 +9,19 @@
 - The local verification checkpoint used no GitHub credential or publication. The subsequent authorized feature-branch commit/push and draft PR are recorded below; no image publication or deployment was performed.
 - Figma designs are owner-approved. Version 0.2.0 implements the browser manager/player and native TV POC; current local results are below. Earlier foundation/documentation sections are historical checkpoints.
 
+## Browser CI synchronization corrections — 2026-11-09
+
+[PR #2](https://github.com/afbeals/myTuner/pull/2) initially passed backend and Android CI after the SDK setup correction. Browser [pull-request run 42577854540](https://github.com/afbeals/myTuner/actions/runs/42577854540) passed 87/88 tests; [push run 42577849105](https://github.com/afbeals/myTuner/actions/runs/42577849105) passed 84/88. These were failed runs, not complete acceptance. Their uploaded screenshots and traces identify four timing assumptions corrected in the existing tests:
+
+- Wait for visible mocked Now/Next data before responsive screenshots. The failed narrow image showed the temporary “Preview programming” state rather than a font/layout regression.
+- Let navigation finish before pausing the simulated guide clock, then advance it explicitly. Previously the first or second five-second episode could expire during setup/assertion polling.
+- Start the delivery-outage check with sufficient time in the authoritative interval and verify persistence across two healthy polls for that same entry. A new interval legitimately reconnects; the test must distinguish that recovery from a healthy poll incorrectly clearing an error.
+- Match the program return to the particular observed commercial using its end time and expected source offset. A program response seen before a later commercial cannot satisfy that return. A separate long-program fixture at 8792 keeps the post-commercial caption/HLS observation window independent of slow CI buffering and leaves other fixtures/screenshot baselines unchanged.
+
+The focused four-case comparison run passes, including the existing desktop/compact/narrow PNGs: `/private/tmp/mytuner-ci-races-long-focused.log` (4/4, 47.5 seconds). The guide-clock case also passes three independent fresh-fixture runs in `mytuner-ci-clock-fresh-1.log` through `-3.log` under `/private/tmp`. The final subtitle fixture starts its seven-second truncated commercial at source offset 20000, with 100 seconds of program left afterward; its final focused rerun passes 1/1 (36.7 seconds) in `/private/tmp/mytuner-ci-subtitle-final.log`. Intermediate local diagnostics included an incorrect exact-text locator, shared-fixture duplicate channels and fixture/short-window timeouts; they are not recorded as passes. [PR checks](https://github.com/afbeals/myTuner/pull/2/checks) provide the current full remote result.
+
+Product source, visual baselines, comparison thresholds and test timeouts are unchanged. No automatic test retries were added. The emulator remains deferred; no new host software or original household media was used.
+
 ## Current handoff — 2026-11-08
 
 Unreleased **0.2.0 / schema 16**. All six selected findings are corrected: **R10-03, R3-08, R6-06, R6-07, R6-08 and R8-03**. [The correction register](IMPLEMENTATION_REVIEW.md#final-six-selected-corrections--2026-11-08) records behavior and tests. **The owner stopped further emulator verification after repeated tooling failures.** Remaining native repeats are deferred, not passed. [Differed](differed.md) is the follow-up register.

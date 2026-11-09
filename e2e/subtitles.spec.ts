@@ -213,184 +213,203 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
   await page.unrouteAll({ behavior: "wait" });
 });
 
-test("browser renders real external subtitles and retains source-time cues during pause with authenticated HLS audio", async ({
-  page,
-}) => {
-  test.setTimeout(60000);
-  const profileId = await setup(page);
-  const sources = await page.evaluate(async () =>
-    (await fetch("/api/sources")).json(),
-  );
-  const source = sources.find((s: { kind: string }) => s.kind === "shows");
-  const selection = await mutate(
+test.describe("external subtitle playback", () => {
+  // Keep the post-commercial program observable while real HLS buffers in CI.
+  test.use({ baseURL: "http://127.0.0.1:8792" });
+  test("browser renders real external subtitles and retains source-time cues during pause with authenticated HLS audio", async ({
     page,
-    `/api/profiles/${profileId}/selection`,
-    "POST",
-    { type: "folder", sourceId: source.id, directory: "", recursive: true },
-  );
-  const item = selection.items.find(
-    (m: { metadata: { episodeNumber: number } }) =>
-      m.metadata.episodeNumber === 1,
-  );
-  const ads =
-    sources.find((s: { kind: string }) => s.kind === "commercials") ??
-    (await mutate(page, "/api/sources", "POST", {
-      name: "Subtitle proof ads",
-      root: source.rootPath.replace(/\/media$/, "/commercials"),
-      kind: "commercials",
-      recursive: true,
-    }));
-  await mutate(page, `/api/sources/${ads.id}/scan`, "POST", {});
-  await mutate(page, `/api/profiles/${profileId}/grants`, "POST", {
-    sourceId: ads.id,
-    subtree: "",
-  });
-  const ch = await mutate(page, "/api/channels", "POST", {
-    name: "External caption proof",
-    profileId,
-    visibility: "private",
-  });
-  await mutate(
-    page,
-    `/api/channels/${ch.id}/programming?horizonMs=3600000`,
-    "PUT",
-    {
-      profileId,
-      seed: 123,
-      groups: [
-        {
-          id: "external",
-          mode: "ordered",
-          selection: { type: "media", ids: [item.id] },
-        },
-      ],
-      commercialSelection: {
-        type: "folder",
-        sourceId: ads.id,
-        directory: "",
+  }) => {
+    test.setTimeout(60000);
+    const profileId = await setup(page);
+    const sources = await page.evaluate(async () =>
+      (await fetch("/api/sources")).json(),
+    );
+    const source = sources.find((s: { kind: string }) => s.kind === "shows");
+    const selection = await mutate(
+      page,
+      `/api/profiles/${profileId}/selection`,
+      "POST",
+      { type: "folder", sourceId: source.id, directory: "", recursive: true },
+    );
+    const item = selection.items.find(
+      (m: { metadata: { episodeNumber: number } }) =>
+        m.metadata.episodeNumber === 1,
+    );
+    const ads =
+      sources.find((s: { kind: string }) => s.kind === "commercials") ??
+      (await mutate(page, "/api/sources", "POST", {
+        name: "Subtitle proof ads",
+        root: source.rootPath.replace(/\/media$/, "/commercials"),
+        kind: "commercials",
         recursive: true,
+      }));
+    await mutate(page, `/api/sources/${ads.id}/scan`, "POST", {});
+    await mutate(page, `/api/profiles/${profileId}/grants`, "POST", {
+      sourceId: ads.id,
+      subtree: "",
+    });
+    const ch = await mutate(page, "/api/channels", "POST", {
+      name: "External caption proof",
+      profileId,
+      visibility: "private",
+    });
+    await mutate(
+      page,
+      `/api/channels/${ch.id}/programming?horizonMs=3600000`,
+      "PUT",
+      {
+        profileId,
+        seed: 123,
+        groups: [
+          {
+            id: "external",
+            mode: "ordered",
+            selection: { type: "media", ids: [item.id] },
+          },
+        ],
+        commercialSelection: {
+          type: "folder",
+          sourceId: ads.id,
+          directory: "",
+          recursive: true,
+        },
+        rules: {
+          between: false,
+          positions: [{ kind: "timestamp", value: 20000 }],
+          maxClips: 1,
+          maxDurationMs: 7000,
+          overflowPolicy: "truncate",
+          minRemainingMs: 6000,
+          repeatAllowance: 100,
+          maxPerBreak: 1,
+          cooldownMs: 0,
+        },
       },
-      rules: {
-        between: false,
-        positions: [{ kind: "timestamp", value: 8000 }],
-        maxClips: 1,
-        maxDurationMs: 7000,
-        overflowPolicy: "truncate",
-        minRemainingMs: 6000,
-        repeatAllowance: 100,
-        maxPerBreak: 1,
-        cooldownMs: 0,
-      },
-    },
-  );
-  await mutate(
-    page,
-    `/api/profiles/${profileId}/subscriptions/${ch.id}`,
-    "PUT",
-    {},
-  );
-  const commercial = page.waitForResponse(
-    async (r) =>
-      r.request().method() === "GET" &&
-      /\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname) &&
-      r.status() === 200 &&
-      (await r.json()).playback?.entry.kind === "commercial",
-  );
-  await page.reload();
-  await page.goto("/#watch");
-  await page
-    .getByRole("article")
-    .filter({ hasText: "External caption proof" })
-    .getByRole("button", { name: "Watch live", exact: true })
-    .click();
-  const captions = page.getByRole("combobox", {
-    name: "Subtitles",
-    exact: true,
-  });
-  const en = await captions
-    .locator("option")
-    .filter({ hasText: "en · subfolder" })
-    .getAttribute("value");
-  expect(en).toBeTruthy();
-  const captionResponse = page.waitForResponse(
-    (r) => /subtitles\/1\d+\.vtt/.test(r.url()) && r.status() === 200,
-  );
-  await captions.selectOption(en!);
-  await captionResponse;
-  await expect(page.locator(".subtitle-cue")).toHaveText(
-    "External fixture episode 1",
-  );
-  const returnedProgram = page.waitForResponse(
-    async (r) =>
-      r.request().method() === "GET" &&
-      /\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname) &&
-      r.status() === 200 &&
-      (await r.json()).playback?.entry.kind === "program" &&
-      (await r.json()).playback.entry.offsetMs === 8000,
-  );
-  // Observe boundaries concurrently with audio buffering. Waiting for HLS to
-  // become ready first can miss the short four-second post-commercial interval.
-  await Promise.all([
-    (async () => {
-      const ad = await (await commercial).json();
-      expect(ad.playback.entry.endMs - ad.playback.entry.startMs).toBe(7000);
-      await expect(page.locator(".subtitle-cue")).toBeHidden();
-      const program = await returnedProgram;
-      expect((await program.json()).playback.entry.offsetMs).toBe(8000);
-      await expect(page.locator(".subtitle-cue")).toHaveText(
-        "External fixture episode 1",
-      );
-    })(),
-    (async () => {
-      let pausedProgram = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
+    );
+    await mutate(
+      page,
+      `/api/profiles/${profileId}/subscriptions/${ch.id}`,
+      "PUT",
+      {},
+    );
+    const commercial = page.waitForResponse(
+      async (r) =>
+        r.request().method() === "GET" &&
+        /\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname) &&
+        r.status() === 200 &&
+        (await r.json()).playback?.entry.kind === "commercial",
+    );
+    await page.reload();
+    await page.goto("/#watch");
+    await page
+      .getByRole("article")
+      .filter({ hasText: "External caption proof" })
+      .getByRole("button", { name: "Watch live", exact: true })
+      .click();
+    const captions = page.getByRole("combobox", {
+      name: "Subtitles",
+      exact: true,
+    });
+    const en = await captions
+      .locator("option")
+      .filter({ hasText: "en · subfolder" })
+      .getAttribute("value");
+    expect(en).toBeTruthy();
+    const captionResponse = page.waitForResponse(
+      (r) => /subtitles\/1\d+\.vtt/.test(r.url()) && r.status() === 200,
+    );
+    await captions.selectOption(en!);
+    await captionResponse;
+    await expect(page.locator(".subtitle-cue")).toHaveText(
+      "External fixture episode 1",
+    );
+    // Observe the commercial and its matching return while real audio buffers.
+    // The long fixture leaves enough program time to inspect returned cues.
+    await Promise.all([
+      (async () => {
+        const ad = await (await commercial).json();
+        expect(ad.playback.entry.endMs - ad.playback.entry.startMs).toBe(7000);
+        // Joining midway can skip the first ad. Match the return to the ad seen.
+        const returnedProgram = page.waitForResponse(async (r) => {
+          if (
+            r.request().method() !== "GET" ||
+            !/\/api\/playback\/sessions\/[^/]+$/.test(
+              new URL(r.url()).pathname,
+            ) ||
+            r.status() !== 200
+          )
+            return false;
+          const current = await r.json();
+          return (
+            current.playback?.entry.kind === "program" &&
+            current.playback.entry.startMs === ad.playback.entry.endMs &&
+            current.playback.entry.offsetMs === 20000
+          );
+        });
+        await expect(page.locator(".subtitle-cue")).toBeHidden();
+        const program = await returnedProgram;
+        expect((await program.json()).playback.entry.offsetMs).toBe(20000);
         await expect(page.locator(".subtitle-cue")).toHaveText(
           "External fixture episode 1",
         );
-        const pausedResponse = page.waitForResponse(
-          (r) =>
-            r.request().method() === "POST" &&
-            r.url().endsWith("/pause") &&
-            r.status() === 200,
-        );
-        await page.getByRole("button", { name: "Pause", exact: true }).click();
-        const paused = await (await pausedResponse).json();
-        expect(paused.paused).toBe(true);
-        await expect(
-          page.getByRole("button", { name: "Resume", exact: true }),
-        ).toBeVisible();
-        if (paused.playback.entry.kind === "program") {
-          pausedProgram = true;
+      })(),
+      (async () => {
+        let pausedProgram = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
           await expect(page.locator(".subtitle-cue")).toHaveText(
             "External fixture episode 1",
           );
-          break;
+          const pausedResponse = page.waitForResponse(
+            (r) =>
+              r.request().method() === "POST" &&
+              r.url().endsWith("/pause") &&
+              r.status() === 200,
+          );
+          await page
+            .getByRole("button", { name: "Pause", exact: true })
+            .click();
+          const paused = await (await pausedResponse).json();
+          expect(paused.paused).toBe(true);
+          await expect(
+            page.getByRole("button", { name: "Resume", exact: true }),
+          ).toBeVisible();
+          if (paused.playback.entry.kind === "program") {
+            pausedProgram = true;
+            await expect(page.locator(".subtitle-cue")).toHaveText(
+              "External fixture episode 1",
+            );
+            break;
+          }
+          // A real live boundary can occur between seeing a cue and the server
+          // applying Pause. Commercials correctly have no episode captions.
+          expect(paused.playback.entry.kind).toBe("commercial");
+          await expect(page.locator(".subtitle-cue")).toBeHidden();
+          await page
+            .getByRole("button", { name: "Resume", exact: true })
+            .click();
         }
-        // A real live boundary can occur between seeing a cue and the server
-        // applying Pause. Commercials correctly have no episode captions.
-        expect(paused.playback.entry.kind).toBe("commercial");
-        await expect(page.locator(".subtitle-cue")).toBeHidden();
+        expect(
+          pausedProgram,
+          "pause an authoritative program interval before checking its cue",
+        ).toBe(true);
         await page.getByRole("button", { name: "Resume", exact: true }).click();
-      }
-      expect(
-        pausedProgram,
-        "pause an authoritative program interval before checking its cue",
-      ).toBe(true);
-      await page.getByRole("button", { name: "Resume", exact: true }).click();
-      const segment = page.waitForResponse(
-        (r) => r.url().includes(".ts?audioTrack=2") && r.status() === 200,
-      );
-      await page
-        .getByRole("combobox", { name: "Audio", exact: true })
-        .selectOption("2");
-      await segment;
-    })(),
-  ]);
-  await expect
-    .poll(() =>
-      page.locator("video").evaluate((v) => (v as HTMLVideoElement).readyState),
-    )
-    .toBeGreaterThanOrEqual(2);
+        const segment = page.waitForResponse(
+          (r) => r.url().includes(".ts?audioTrack=2") && r.status() === 200,
+        );
+        await page
+          .getByRole("combobox", { name: "Audio", exact: true })
+          .selectOption("2");
+        await segment;
+      })(),
+    ]);
+    await expect
+      .poll(() =>
+        page
+          .locator("video")
+          .evaluate((v) => (v as HTMLVideoElement).readyState),
+      )
+      .toBeGreaterThanOrEqual(2);
+  });
 });
 
 test("output cleanup shows a readable review, guards confirmation, and recovers a stale review before applying", async ({

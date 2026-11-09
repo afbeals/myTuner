@@ -150,7 +150,7 @@ Run `node --import tsx scripts/benchmark-library.mjs` to generate isolated 10k/5
 
 ### Sixth-round browser fixture isolation
 
-The original browser journeys use the synthetic API at 8787. `e2e/round6.spec.ts` uses an independently started synthetic API at 8786 so earlier scan/search/edit journeys cannot change metadata used by its inspector/readiness snapshots. Playwright starts and stops these fixtures plus the isolated mixed-format acceptance fixture on 8791. The manual demo remains on 8788. Native fault tests use their own long-episode fixture on 8790 plus the loopback fault proxy on 8789; install the current debug APK before running them. No test fixture is a household source or production server.
+The original browser journeys use the synthetic API at 8787. External subtitle playback uses a separate API at 8792 with `MYTUNER_E2E_LONG_EPISODES=1`: 120-second synthetic programs give the seven-second commercial a long observable return interval without changing short-fixture screenshots or other transition tests. `e2e/round6.spec.ts` uses an independently started synthetic API at 8786 so earlier scan/search/edit journeys cannot change metadata used by its inspector/readiness snapshots. Playwright starts and stops these fixtures plus the isolated mixed-format acceptance fixture on 8791. The manual demo remains on 8788. Native fault tests use their own long-episode fixture on 8790 plus the loopback fault proxy on 8789; install the current debug APK before running them. No test fixture is a household source or production server.
 
 For a focused native R6 check after building/installing the current APK, start a separate fixture with `MYTUNER_E2E_PORT=8790 MYTUNER_E2E_LONG_EPISODES=1 node --import tsx e2e/server.ts`, then run `MYTUNER_TV_TEST_SERVER=http://127.0.0.1:8790 MYTUNER_TV_AVAILABILITY_ONLY=1 npm run test:tv` with `MYTUNER_ADB` pointing to the SDK adb when it is not on PATH. This mode verifies source availability, pause, initially unavailable joins and fresh-launch PIN; omit the availability flag for the longer poll/control/late-caption flow. Both modes target disposable emulators only. Stop the fixture/emulator after completion; physical-device acceptance remains separate.
 
@@ -232,7 +232,7 @@ Normal mode compares reviewed synthetic pixel baselines. `MYTUNER_UPDATE_TV_BASE
 
 Native tracks mode alternates delivered caption language metadata between equivalent `eng` and `en` labels while retaining real authenticated caption bodies. It verifies preference continuity through renegotiation, commercial return and the MP4→MKV/HLS transition. JVM checks cover the complete platform ISO mapping, bibliographic/deprecated aliases and fallback/locale behavior.
 
-The existing demo8788 and Vite5173 are preserved. Tests use their own disposable8786/8787/8789/8790/8791 ports; never rebuild hashed browser assets during a fixture run or reset a demo to run tests. New host software/toolchain components still require explicit owner approval. [Differed](differed.md) records the remaining external acceptance.
+The existing demo8788 and Vite5173 are preserved. Tests use their own disposable8786/8787/8789/8790/8791/8792 ports; never rebuild hashed browser assets during a fixture run or reset a demo to run tests. New host software/toolchain components still require explicit owner approval. [Differed](differed.md) records the remaining external acceptance.
 
 ### Focused enlarged pairing regression
 

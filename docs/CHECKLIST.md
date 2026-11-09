@@ -415,3 +415,5 @@ The [ranked register](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposit
 
 - [ ] D11d Current-APK emulator full recovery, actual track/alias transitions and TalkBack repeat: owner explicitly deferred further emulator verification after tooling stalls. This is separate from physical/human D11b.
 - [ ] N100 Remaining emulator verification is deferred at the owner’s request. Preserve completed state/font/pairing results and resume only as a separate follow-up; see differed.md. No complete final full/track/accessibility pass is claimed.
+
+- [x] N101 Correct confirmed browser CI synchronization assumptions: await guide data before screenshots, pause the mock clock after navigation, match delivery-error polls to one interval and subtitle return to the observed commercial; use an isolated long synthetic subtitle fixture at 8792. Focused checks pass without replacing baselines or increasing timeouts; full remote results are linked in VERIFICATION.md.

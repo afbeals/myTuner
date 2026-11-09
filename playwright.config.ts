@@ -47,5 +47,13 @@ export default defineConfig({
       timeout: 60000,
       gracefulShutdown: { signal: "SIGTERM", timeout: 10000 },
     },
+    {
+      command:
+        "MYTUNER_E2E_PORT=8792 MYTUNER_E2E_LONG_EPISODES=1 npx tsx e2e/server.ts",
+      url: "http://127.0.0.1:8792/api/health",
+      reuseExistingServer: !process.env.CI,
+      timeout: 60000,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10000 },
+    },
   ],
 });

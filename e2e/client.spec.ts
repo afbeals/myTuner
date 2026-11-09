@@ -155,6 +155,11 @@ test("approved browser foundation: sign-in, desktop/compact/narrow layouts, keyb
   ).toBeVisible();
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({ width, height: 1024 });
+    await expect(
+      page
+        .getByText("Next · Maple Street", { exact: true })
+        .filter({ visible: true }),
+    ).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await expect(page).toHaveScreenshot(`channels-${width}.png`, {
       fullPage: true,
@@ -788,6 +793,22 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
   await expect(
     page.getByRole("button", { name: "Retry playback" }),
   ).toHaveCount(0);
+  // Check persistence within one interval; a new interval correctly reconnects.
+  const sameInterval = await page.waitForResponse(async (r) => {
+    if (
+      r.request().method() !== "GET" ||
+      !/\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname) ||
+      r.status() !== 200
+    )
+      return false;
+    const current = (await r.json()) as Playback;
+    return Boolean(
+      current.playback &&
+      current.playback.entry.endMs - current.positionMs >= 8000,
+    );
+  });
+  const outageEntryId = ((await sameInterval.json()) as Playback).playback!
+    .entry.id;
   let failDelivery = true;
   await page.route("**/negotiate", async (route) => {
     if (failDelivery) {
@@ -802,10 +823,20 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
   await expect(page.getByRole("status")).toContainText(
     "Synthetic delivery outage",
   );
-  await page.waitForTimeout(2200);
-  await expect(page.getByRole("status")).toContainText(
-    "Synthetic delivery outage",
-  );
+  for (let poll = 0; poll < 2; poll++) {
+    const healthy = await page.waitForResponse(
+      (r) =>
+        r.request().method() === "GET" &&
+        /\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname) &&
+        r.status() === 200,
+    );
+    expect(((await healthy.json()) as Playback).playback!.entry.id).toBe(
+      outageEntryId,
+    );
+    await expect(page.getByRole("status")).toContainText(
+      "Synthetic delivery outage",
+    );
+  }
   await page.getByRole("button", { name: "Retry playback" }).click();
   await expect
     .poll(() =>
@@ -1333,8 +1364,9 @@ test("management now-next advances while idle and refreshes coverage without los
   page,
 }) => {
   const { channelId } = await proofChannel(page, "Idle guide proof");
-  await page.clock.install();
-  const now = await page.evaluate(() => Date.now());
+  const now = Date.now();
+  // Let navigation timers run before pausing at the first mocked episode.
+  await page.clock.install({ time: now - 60000 });
   let reads = 0;
   await page.route("**/guide*", async (route) => {
     const response = await route.fetch(),
@@ -1378,6 +1410,8 @@ test("management now-next advances while idle and refreshes coverage without los
   const row = page.getByRole("row").filter({
     has: page.getByRole("button", { name: "Idle guide proof", exact: true }),
   });
+  await expect(row).toBeVisible();
+  await page.clock.pauseAt(now);
   await expect(row).toContainText("Idle episode one");
   await page.clock.runFor(6000);
   await expect(row).not.toContainText("Idle episode one");
