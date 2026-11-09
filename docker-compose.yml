@@ -1,60 +1,45 @@
-# myTuner — deployment scaffold for Unraid.
-#
-# Replace every /mnt/user/... path below with your actual Unraid share paths before
-# deploying. See INVESTIGATION.md ("Unraid mount strategy") for why these must be
-# /mnt/user/<share>/... paths, never /mnt/diskN/... or /mnt/user0/....
-#
-# Copy .env.example to .env and fill in real values before running — .env is
-# git-ignored so secrets never get committed.
-
 services:
-  ersatztv:
-    # Confirmed from ErsatzTV's own .github/workflows/docker.yml — this is the actual
-    # published image, not a guess.
-    image: ghcr.io/ersatztv/legacy:latest
-    container_name: ersatztv
+  mytuner:
+    image: afbeals/mytuner:${MYTUNER_VERSION:-0.2.0}
+    container_name: mytuner
+    init: true
     restart: unless-stopped
+    user: "${MYTUNER_UID:-1000}:${MYTUNER_GID:-1000}"
     ports:
-      - "8409:8409"
-    volumes:
-      - ${ERSATZTV_CONFIG_PATH:-/mnt/user/appdata/ersatztv}:/config
-      # Shared library content — read-only. ErsatzTV only ever reads video files and
-      # the chapter sidecars; it never needs to write into your media folders.
-      - ${SHARED_LIBRARY_PATH:?set SHARED_LIBRARY_PATH in .env}:/media/shared:ro
-      # Private-channel content — also read-only for ErsatzTV.
-      - ${PRIVATE_LIBRARY_PATH:?set PRIVATE_LIBRARY_PATH in .env}:/media/private:ro
-    tmpfs:
-      # Matches ErsatzTV's own example compose file (docker/docker-compose.yml in
-      # ErsatzTV/legacy) — keeps transient transcode scratch files off the array disks.
-      - /transcode
-
-  private-channel-proxy:
-    image: caddy:2-alpine
-    container_name: private-channel-proxy
-    restart: unless-stopped
-    depends_on:
-      - ersatztv
-    ports:
-      - "${PROXY_PORT:-8443}:${PROXY_PORT:-8443}"
+      - "${MYTUNER_PORT:-8777}:8777"
     environment:
-      - PROXY_PORT=${PROXY_PORT:-8443}
-      - PRIVATE_CHANNEL_TOKEN=${PRIVATE_CHANNEL_TOKEN:?set PRIVATE_CHANNEL_TOKEN in .env}
-      - ERSATZTV_UPSTREAM=http://ersatztv:8409
+      MYTUNER_COLLECTION_RETENTION_DAYS: "${MYTUNER_COLLECTION_RETENTION_DAYS:-7}"
+      MYTUNER_REPORT_RETENTION_DAYS: "${MYTUNER_REPORT_RETENTION_DAYS:-30}"
+      MYTUNER_ENCODER_CONCURRENCY: "${MYTUNER_ENCODER_CONCURRENCY:-3}"
+      MYTUNER_SECURE_COOKIE: "${MYTUNER_SECURE_COOKIE:-false}"
+      MYTUNER_PUBLIC_ORIGIN: "${MYTUNER_PUBLIC_ORIGIN:-}"
     volumes:
-      - ./private-channel-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
-
-  # Not a long-running service — run on demand (see below) or on a cron schedule.
-  # Kept here under a profile so `docker compose up` doesn't start it automatically.
-  chapter-generator:
-    build: ./sidecar-generator
-    container_name: chapter-generator
-    profiles: ["tools"]
-    volumes:
-      # Read-write: this is the one component that writes the sidecar .xml files.
-      - ${SHARED_LIBRARY_PATH:?set SHARED_LIBRARY_PATH in .env}:/media/shared
-    # Example manual run (adjust --mode/--breaks/etc. per INVESTIGATION.md):
-    #   docker compose run --rm chapter-generator \
-    #     /media/shared --mode random-percent --min-percent 20 --max-percent 80 \
-    #     --ersatztv-url http://ersatztv:8409 --library-id 1 \
-    #     --ersatztv-api-key "$ERSATZTV_API_KEY"
-    command: ["--help"]
+      - type: bind
+        source: ${MYTUNER_DATA_PATH:?set MYTUNER_DATA_PATH}
+        target: /app/data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MYTUNER_GENERATED_PATH:?set MYTUNER_GENERATED_PATH}
+        target: /generated
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MYTUNER_CACHE_PATH:?set MYTUNER_CACHE_PATH}
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MYTUNER_MEDIA_PATH:?set MYTUNER_MEDIA_PATH}
+        target: /media
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MYTUNER_COMMERCIALS_PATH:?set MYTUNER_COMMERCIALS_PATH}
+        target: /commercials
+        read_only: true
+        bind:
+          create_host_path: false
+    labels:
+      net.unraid.docker.webui: "http://[IP]:[PORT:8777]/"

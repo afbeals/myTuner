@@ -1,42 +1,66 @@
 # myTuner
 
-A personal "TV network" for an existing media library, running on Unraid: multiple
-live channels with configurable commercial breaks (between and within episodes),
-plus one private channel visible only to one person.
+A standalone personal TV network over existing read-only Unraid media. Manage programming in a browser and watch continuously scheduled channels on a browser/TV player. No Plex or ErsatzTV dependency.
 
-Built on [ErsatzTV](https://github.com/ErsatzTV/legacy) rather than a custom
-streaming engine — see `INVESTIGATION.md` for the full research trail and the reasoning
-behind every design decision below.
+**Current version: 0.2.0 POC.** The approved browser manager/player and native Android/Fire OS TV client are implemented. The server serves the browser at its root URL; a locally built, debug-signed TV APK is available under `android/app/build/outputs/apk/debug/app-debug.apk`. Browser/native verification is recorded in the checklist; actual Bravia/Fire OS and Unraid acceptance remain open. No store listing or published release is implied.
 
-## Layout
+All six formerly deferred findings and backend/browser verification are complete. Native checks have partial passing evidence; remaining emulator verification was deferred at the owner’s request. [Verification](docs/VERIFICATION.md) records results, and [differed](docs/differed.md) records remaining emulator, device/model/OS, Windows Docker, Unraid, representative-media and human acceptance.
 
-- `INVESTIGATION.md` — the plan, and the research it's built on. Read this first.
-- `sidecar-generator/` — the one custom application in this project: writes chapter
-  marker sidecar files next to existing videos (never modifying them) so ErsatzTV's
-  Mid-Roll filler can interrupt playback mid-show. See its module docstring and
-  `test_generate_chapters.py`.
-- `private-channel-proxy/Caddyfile` — reverse-proxy config that gates the private
-  channel's stream behind a secret token in the URL, since Plex's Live TV access can't
-  be scoped to one person.
-- `docker-compose.yml` / `.env.example` — deployment scaffold.
+See [Windows Docker acceptance](docs/WINDOWS_DOCKER.md), [Unraid/TV pilot gates](docs/PILOT_ACCEPTANCE.md) and [the 58-frame implementation inventory](docs/DESIGN_COVERAGE.md) for the current delivery work.
 
-## Deploying — three docs, in order
+## Start here
 
-1. **`DEPLOY_UNRAID.md`** — enabling Docker on Unraid, and actually getting these
-   containers running there (Unraid doesn't run a bare `docker-compose.yml` without an
-   extra plugin — this covers both that path and the no-plugin alternative, plus what
-   URL/endpoint you actually end up hitting for each piece).
-2. **`ERSATZTV_SETUP.md`** — once ErsatzTV is running, configuring it: libraries,
-   channels, schedules, filler presets, Playouts, the private channel, Plex DVR setup.
-3. Run the chapter generator once your libraries exist in step 2 (exact command is in
-   both docs above) — `--dry-run` first to preview split points before it writes
-   anything.
+Open the [documentation index](docs/README.md) for the complete guide and recommended reading order.
 
-`.env.example` has every variable both docs above reference — `cp` it to `.env` and
-fill in real values (your actual share paths, a generated token) before starting
-anything; `.env` is git-ignored so secrets never get committed.
+- [Create your first channel](docs/FIRST_CHANNEL.md) — browser setup from an empty installation to watching
+- [TV installation and Unraid connection](docs/TV_INSTALLATION.md) — Bravia/Google TV first, then Android-based Fire OS sticks
+- [Supplied Figma handoff and reconciliation](docs/DESIGN_REVIEW.md)
+- [Product overview and plan](docs/MYTUNER_PLAN.md) and [delivery checklist](docs/CHECKLIST.md)
+- [Architecture and technology](docs/ARCHITECTURE.md) and [database reference](docs/DATABASE.md)
+- [Media discovery: Sonarr, Radarr and custom directories](docs/MEDIA_DISCOVERY.md)
+- [Audio and subtitle setup](docs/SUBTITLES.md) — embedded/external captions, search locations and manual associations
+- [Browser/native implementation, builds and controls](docs/CLIENTS.md)
+- [Applications and user journeys](docs/APPLICATIONS.md), including TV pairing/profile/PIN startup
+- [Scheduling, commercials and playback](docs/SCHEDULING_AND_PLAYBACK.md)
+- [Security and permissions](docs/SECURITY.md)
+- [Backend/API reference](docs/BACKEND.md) and [development/testing](docs/DEVELOPMENT.md)
+- [Operational runbooks](docs/OPERATIONS.md) and [Docker/Unraid setup](docs/DEPLOYMENT.md)
+- [Architecture decisions](docs/DECISIONS.md), [Figma design brief](docs/DESIGN_BRIEF.md) and [verification evidence](docs/VERIFICATION.md)
 
-## Status
+## Try the local demo
 
-See "Implementation progress" and "Open items carried into implementation" at the top
-of `INVESTIGATION.md` for what's built, what's config-only, and what's still unverified.
+With Node 24.13+ and FFmpeg/ffprobe installed:
+
+```sh
+npm ci
+npm run dev:demo
+```
+
+Open `http://127.0.0.1:8788/` and sign in with **designer / synthetic-browser-password**. Choose **Living Room**, then **Watch TV → After School → Watch live**. This uses the real application with temporary SQLite and generated synthetic video; it does not require or connect to household services. Changes reset on restart, and Ctrl-C stops/cleans the demo. See [development](docs/DEVELOPMENT.md#local-demo-with-mock-data) for accounts, frontend hot reload and testing instructions.
+
+## Local application
+
+Requires Node 24.13+ within the Node 24 line and FFmpeg/ffprobe for scanning/generation.
+
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run test:smoke
+```
+
+Bootstrap an admin with `MYTUNER_ADMIN_PASSWORD` supplied through your shell environment, then run:
+
+```sh
+npm run admin:create -- your-admin-name
+npm run dev
+```
+
+Open `http://127.0.0.1:8777/` for the browser manager; health is `/api/health`. No default account exists. See the backend guide for authenticated API usage. SQLite and generated outputs default to git-ignored `.data/`.
+
+Node's built-in SQLite currently emits an experimental API warning on Node 24; the supported Node major is pinned and tests use real SQLite.
+
+## Legacy POC
+
+The root INVESTIGATION.md, DEPLOY_UNRAID.md, ERSATZTV_SETUP.md, sidecar-generator/, private-channel-proxy/, docker-compose.legacy.yml, and .env.legacy.example preserve the earlier Plex/ErsatzTV approach. They are historical, not standalone deployment instructions. The legacy chapter generator writes sidecars and must not be run against the standalone read-only source library.

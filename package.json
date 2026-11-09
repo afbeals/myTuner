@@ -1,0 +1,60 @@
+{
+  "name": "mytuner",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.0 <25"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "npm run build:server && npm run build:web",
+    "start": "node dist/main.js",
+    "admin:create": "tsx src/bootstrap.ts",
+    "typecheck": "npm run typecheck:server && npm run typecheck:web",
+    "test": "tsx --test test/*.test.ts",
+    "test:coverage": "tsx --test --experimental-test-coverage test/*.test.ts",
+    "format": "prettier --write src test docs web e2e playwright.config.ts package.json tsconfig*.json README.md AGENTS.md scripts .github",
+    "format:check": "prettier --check src test docs web e2e playwright.config.ts package.json tsconfig*.json README.md AGENTS.md scripts .github",
+    "db:backup": "tsx src/backup-cli.ts",
+    "docker:build": "node scripts/docker.mjs build",
+    "docker:test": "node scripts/docker.mjs test",
+    "docker:tag": "node scripts/docker.mjs tag",
+    "docker:push": "node scripts/docker.mjs push",
+    "db:verify": "tsx src/verify-cli.ts",
+    "db:restore": "tsx src/restore-cli.ts",
+    "test:smoke": "npm run build && node scripts/smoke.mjs",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build:server": "tsc -p tsconfig.build.json",
+    "build:web": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
+    "typecheck:server": "tsc --noEmit",
+    "typecheck:web": "tsc -p web/tsconfig.json",
+    "test:ui": "playwright test",
+    "test:ui:update": "playwright test --update-snapshots",
+    "test:tv": "node e2e/tv-smoke.mjs",
+    "dev:demo": "npm run build && tsx e2e/server.ts --demo"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.10",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
+    "@fontsource/space-mono": "^5.3.0",
+    "fast-xml-parser": "^5.12.0",
+    "fastify": "^5.6.2",
+    "hls.js": "^1.7.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.6"
+  }
+}
