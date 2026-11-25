@@ -29,6 +29,8 @@ Record the exact Sony Bravia model, Android/Google TV version/API level, display
 
 ## Windows Docker testing
 
+2026-11-25: the owner reported a successful build and four passing acceptance gates, followed by a timeout verifying the backup; cleanup passed. Rerun the full acceptance suite on Windows with the 0.2.1 fix before closing this gate. Linux CI acceptance is separate evidence.
+
 The owner confirmed Docker Desktop is already installed on the Windows machine. Use that existing installation; no Mac Docker installation is planned. Container execution remains unverified until run there. Follow [Windows Docker acceptance](WINDOWS_DOCKER.md).
 
 - [ ] Record Windows/Node/Docker/Compose versions and the active Linux-container context.

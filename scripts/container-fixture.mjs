@@ -27,57 +27,73 @@ async function hashes() {
   );
 }
 switch (process.argv[2]) {
-  case "prepare": {
+  case "prepare":
+  case "preview-prepare": {
     assert.equal(
       process.getuid(),
       0,
       "Only synthetic volume initialization uses root",
     );
     for (const root of roots) await mkdir(root, { recursive: true });
-    await writeFile(
-      "/fixtures/captions.srt",
-      "1\n00:00:00,000 --> 00:00:15,000\nSynthetic acceptance caption\n",
-    );
-    execFileSync(
-      "ffmpeg",
-      [
-        "-v",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=size=160x90:rate=24",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=440:sample_rate=48000",
-        "-i",
+    const prepared =
+      process.argv[2] === "preview-prepare" &&
+      (
+        await Promise.all(
+          files.map((name) =>
+            stat(`/fixtures/${name}`).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        )
+      ).every(Boolean);
+    if (!prepared) {
+      await writeFile(
         "/fixtures/captions.srt",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-map",
-        "2:s:0",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-c:s",
-        "mov_text",
-        "-t",
-        "15",
-        "/fixtures/Pilot.S01E01.mp4",
-      ],
-      { timeout: 30000 },
-    );
-    await unlink("/fixtures/captions.srt");
-    await writeFile(
-      "/fixtures/Pilot.S01E01.nfo",
-      "<episodedetails><title>Synthetic pilot</title><showtitle>Acceptance</showtitle><season>1</season><episode>1</episode><plot>Read-only fixture</plot></episodedetails>",
-    );
+        "1\n00:00:00,000 --> 00:00:15,000\nSynthetic acceptance caption\n",
+      );
+      execFileSync(
+        "ffmpeg",
+        [
+          "-y",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "testsrc2=size=160x90:rate=24",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:sample_rate=48000",
+          "-i",
+          "/fixtures/captions.srt",
+          "-map",
+          "0:v:0",
+          "-map",
+          "1:a:0",
+          "-map",
+          "2:s:0",
+          "-c:v",
+          "libx264",
+          "-pix_fmt",
+          "yuv420p",
+          "-c:a",
+          "aac",
+          "-c:s",
+          "mov_text",
+          "-t",
+          "15",
+          "/fixtures/Pilot.S01E01.mp4",
+        ],
+        { timeout: 30000 },
+      );
+      await unlink("/fixtures/captions.srt");
+      await writeFile(
+        "/fixtures/Pilot.S01E01.nfo",
+        "<episodedetails><title>Synthetic pilot</title><showtitle>Acceptance</showtitle><season>1</season><episode>1</episode><plot>Read-only fixture</plot></episodedetails>",
+      );
+    }
     for (const root of roots) await chown(root, 1000, 1000);
     for (const name of files) await chown(`/fixtures/${name}`, 1000, 1000);
     console.log(JSON.stringify(await hashes()));

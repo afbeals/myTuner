@@ -5,6 +5,25 @@ on:
 permissions:
   contents: read
 jobs:
+  version:
+    name: Release version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check package version and PR version increase
+        env:
+          VERSION_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$VERSION_BASE" ]; then
+            npm run docker:check -- --base "$VERSION_BASE"
+          else
+            npm run docker:check
+          fi
   backend:
     runs-on: ubuntu-latest
     steps:
@@ -58,3 +77,21 @@ jobs:
         with:
           name: mytuner-tv-poc-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk
+
+  docker:
+    name: Docker acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm run docker:build
+      - run: npm run docker:test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-acceptance
+          path: artifacts/docker/
+          if-no-files-found: ignore

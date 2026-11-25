@@ -1,4 +1,6 @@
-# Browser and TV clients — 0.2.0
+# Browser and TV clients
+
+Server/browser version: **0.2.1**. Native Android/Fire OS client: **0.2.0**, version code 2; API compatibility remains version 1.
 
 ## Implemented surfaces
 

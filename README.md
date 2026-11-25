@@ -2,7 +2,7 @@
 
 A standalone personal TV network over existing read-only Unraid media. Manage programming in a browser and watch continuously scheduled channels on a browser/TV player. No Plex or ErsatzTV dependency.
 
-**Current version: 0.2.0 POC.** The approved browser manager/player and native Android/Fire OS TV client are implemented. The server serves the browser at its root URL; a locally built, debug-signed TV APK is available under `android/app/build/outputs/apk/debug/app-debug.apk`. Browser/native verification is recorded in the checklist; actual Bravia/Fire OS and Unraid acceptance remain open. No store listing or published release is implied.
+**Current server/browser version: 0.2.1 POC; native TV client: 0.2.0.** The approved browser manager/player and native Android/Fire OS TV client are implemented. The server serves the browser at its root URL; a locally built, debug-signed TV APK is available under `android/app/build/outputs/apk/debug/app-debug.apk`. Browser/native verification is recorded in the checklist; actual Bravia/Fire OS and Unraid acceptance remain open. No store listing or published release is implied.
 
 All six formerly deferred findings and backend/browser verification are complete. Native checks have partial passing evidence; remaining emulator verification was deferred at the owner’s request. [Verification](docs/VERIFICATION.md) records results, and [differed](docs/differed.md) records remaining emulator, device/model/OS, Windows Docker, Unraid, representative-media and human acceptance.
 

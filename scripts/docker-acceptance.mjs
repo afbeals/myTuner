@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { mount, cleanupOwned } from "./docker-support.mjs";
+import { mount, cleanupOwned, sanitize } from "./docker-support.mjs";
 
 export async function acceptance(
   run,
-  { root, candidate, signal, report, startupMs = 30000 },
+  { root, candidate, signal, report, startupMs = 30000, onProgress = () => {} },
 ) {
   const prefix = `mytuner-accept-${randomBytes(8).toString("hex")}`;
   const containers = [],
@@ -20,14 +20,17 @@ export async function acceptance(
     const start = Date.now();
     const gate = { name, status: "running" };
     report.gates.push(gate);
+    onProgress(`Acceptance: ${name}...`);
     try {
       await task();
       gate.status = "passed";
     } catch (e) {
       gate.status = "failed";
+      gate.error = sanitize(e.message);
       throw e;
     } finally {
       gate.elapsedMs = Date.now() - start;
+      onProgress(`Acceptance ${gate.status}: ${name} (${gate.elapsedMs}ms)`);
     }
   }
   function common(fixtureReadonly = true, dataReadonly = false) {
@@ -54,7 +57,13 @@ export async function acceptance(
   }
   async function oneoff(
     args,
-    { rootUser = false, readonly = true, dataReadonly = false, env = [] } = {},
+    {
+      rootUser = false,
+      readonly = true,
+      dataReadonly = false,
+      env = [],
+      label,
+    } = {},
   ) {
     const name = `${prefix}-task-${containers.length}`;
     containers.push(name);
@@ -72,7 +81,7 @@ export async function acceptance(
         candidate.imageId,
         ...args,
       ],
-      { signal },
+      { signal, label },
     );
   }
   async function stop() {
@@ -418,18 +427,27 @@ export async function acceptance(
           ...common(),
           candidate.imageId,
         ],
-        { allowFailure: true, signal, timeoutMs: 15000 },
+        {
+          allowFailure: true,
+          signal,
+          timeoutMs: 15000,
+          label: "Exclusive owner check",
+        },
       );
       assert.notEqual(second.code, 0);
       assert.match(second.stderr, /in use/);
       report.snapshot = (
-        await run(["exec", service, "node", "dist/backup-cli.js"], { signal })
+        await run(["exec", service, "node", "dist/backup-cli.js"], {
+          signal,
+          label: "Online backup creation",
+        })
       ).stdout;
       assert.match(report.snapshot, /^\/app\/data\/backups\//);
       const verified = JSON.parse(
         (
           await oneoff(["dist/verify-cli.js", report.snapshot, "--json"], {
             dataReadonly: true,
+            label: "Backup verification",
           })
         ).stdout,
       );
@@ -437,7 +455,7 @@ export async function acceptance(
       report.backupSchema = verified.checkedSchemaVersion;
       const restoreWhileLive = await run(
         ["exec", service, "node", "dist/restore-cli.js", report.snapshot],
-        { allowFailure: true, signal },
+        { allowFailure: true, signal, label: "Live restore rejection check" },
       );
       assert.notEqual(restoreWhileLive.code, 0);
     });
