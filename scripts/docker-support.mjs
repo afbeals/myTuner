@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -24,10 +25,20 @@ export function createRunner({
   env = process.env,
   secrets = [],
   spawnProcess = spawn,
+  onProgress = (line) => process.stderr.write(line),
 } = {}) {
-  return (args, { timeoutMs = 60000, signal, allowFailure = false } = {}) =>
+  return (
+    args,
+    {
+      timeoutMs = 60000,
+      signal,
+      allowFailure = false,
+      label = `Docker ${args[0]}`,
+      progress = false,
+    } = {},
+  ) =>
     new Promise((resolveTask, reject) => {
-      if (signal?.aborted) return reject(Error("Docker operation interrupted"));
+      if (signal?.aborted) return reject(Error(`${label} interrupted`));
       const child = spawnProcess(executable, args, {
         cwd,
         env,
@@ -37,25 +48,39 @@ export function createRunner({
       });
       let stdout = "",
         stderr = "",
-        interrupted = false,
+        interrupted,
         force;
-      const stop = () => {
-        interrupted = true;
+      const stop = (reason) => {
+        if (interrupted) return;
+        interrupted = reason;
         child.kill("SIGTERM");
         force ??= setTimeout(() => child.kill("SIGKILL"), 1500);
       };
+      const pendingLines = { stdout: "", stderr: "" };
+      const show = (kind, chunk) => {
+        if (!progress) return;
+        const lines = (pendingLines[kind] + String(chunk)).split(/\r\n|[\r\n]/);
+        pendingLines[kind] = lines.pop().slice(-128000);
+        for (const line of lines) onProgress(sanitize(line, secrets) + "\n");
+      };
       child.stdout.on("data", (chunk) => {
         stdout = (stdout + chunk).slice(-128000);
+        show("stdout", chunk);
       });
       child.stderr.on("data", (chunk) => {
         stderr = (stderr + chunk).slice(-128000);
+        show("stderr", chunk);
       });
-      const timer = setTimeout(stop, timeoutMs);
-      signal?.addEventListener("abort", stop, { once: true });
+      const abort = () => stop("interrupted");
+      const timer =
+        timeoutMs > 0
+          ? setTimeout(() => stop("timed out"), timeoutMs)
+          : undefined;
+      signal?.addEventListener("abort", abort, { once: true });
       const clear = () => {
         clearTimeout(timer);
         clearTimeout(force);
-        signal?.removeEventListener("abort", stop);
+        signal?.removeEventListener("abort", abort);
       };
       child.once("error", (error) => {
         clear();
@@ -67,18 +92,23 @@ export function createRunner({
       });
       child.once("close", (code) => {
         clear();
+        if (progress)
+          for (const line of Object.values(pendingLines))
+            if (line) onProgress(sanitize(line, secrets) + "\n");
         const result = {
           code,
           stdout: sanitize(stdout, secrets).trim(),
           stderr: sanitize(stderr, secrets).trim(),
         };
         if (interrupted)
-          reject(Error("Docker operation timed out or was interrupted"));
-        else if (code !== 0 && !allowFailure)
           reject(
             Error(
-              `Docker ${args[0]} failed (${code}): ${result.stderr.slice(-3000)}`,
+              `${label} ${interrupted}${interrupted === "timed out" ? ` after ${timeoutMs}ms` : ""}`,
             ),
+          );
+        else if (code !== 0 && !allowFailure)
+          reject(
+            Error(`${label} failed (${code}): ${result.stderr.slice(-3000)}`),
           );
         else resolveTask(result);
       });
@@ -115,6 +145,7 @@ export async function sourceDigest(root) {
     "scripts/docker-support.mjs",
     "scripts/docker-acceptance.mjs",
     "scripts/container-fixture.mjs",
+    "scripts/docker-preview.mjs",
   ])
     await add(path);
   await visit("src");
@@ -178,4 +209,72 @@ export async function cleanupOwned(run, containers, volumes) {
     throw Error(
       `Could not clean up owned test resources: ${failures.join(", ")}`,
     );
+}
+
+function parsedVersion(value) {
+  const match =
+    typeof value === "string" &&
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(
+      value,
+    );
+  if (
+    !match ||
+    match[0] !== value ||
+    match[4]?.split(".").some((part) => /^0\d+$/.test(part))
+  )
+    throw Error("package.json must contain a valid SemVer version");
+  return {
+    core: match.slice(1, 4).map(BigInt),
+    prerelease: match[4]?.split(".") ?? [],
+  };
+}
+export function compareVersions(left, right) {
+  const a = parsedVersion(left),
+    b = parsedVersion(right);
+  for (let i = 0; i < 3; i++)
+    if (a.core[i] !== b.core[i]) return a.core[i] > b.core[i] ? 1 : -1;
+  if (!a.prerelease.length || !b.prerelease.length)
+    return Number(!a.prerelease.length) - Number(!b.prerelease.length);
+  for (let i = 0; i < Math.max(a.prerelease.length, b.prerelease.length); i++) {
+    const x = a.prerelease[i],
+      y = b.prerelease[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x),
+      ny = /^\d+$/.test(y);
+    if (nx && ny) return BigInt(x) > BigInt(y) ? 1 : -1;
+    if (nx !== ny) return nx ? -1 : 1;
+    return x > y ? 1 : -1;
+  }
+  return 0;
+}
+export async function checkVersion(root, baseRef) {
+  const pkg = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+  parsedVersion(pkg.version);
+  const lock = JSON.parse(
+    await readFile(resolve(root, "package-lock.json"), "utf8"),
+  );
+  if (
+    lock.version !== pkg.version ||
+    lock.packages?.[""]?.version !== pkg.version
+  )
+    throw Error(
+      "package.json and both root package-lock.json versions must match",
+    );
+  if (baseRef !== undefined) {
+    if (!baseRef || baseRef.startsWith("-"))
+      throw Error("Choose a valid Git base ref");
+    const result = await promisify(execFile)(
+      "git",
+      ["show", `${baseRef}:package.json`],
+      { cwd: root, timeout: 10000 },
+    );
+    const base = JSON.parse(result.stdout);
+    if (compareVersions(pkg.version, base.version) <= 0)
+      throw Error(
+        `Bump package.json.version above ${base.version} before releasing this change`,
+      );
+  }
+  return pkg.version;
 }

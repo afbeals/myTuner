@@ -14,6 +14,8 @@ import {
   cleanupOwned,
   sanitize,
   sourceDigest,
+  checkVersion,
+  compareVersions,
   // @ts-expect-error The JavaScript CLI has no TypeScript declarations.
 } from "../scripts/docker-support.mjs";
 // @ts-expect-error The JavaScript CLI has no TypeScript declarations.
@@ -36,7 +38,6 @@ async function fixture(t: { after: (f: () => Promise<void>) => void }) {
   for (const name of [
     ".dockerignore",
     "Dockerfile",
-    "package-lock.json",
     "tsconfig.json",
     "tsconfig.build.json",
     "src/server.ts",
@@ -45,11 +46,19 @@ async function fixture(t: { after: (f: () => Promise<void>) => void }) {
     "scripts/docker-support.mjs",
     "scripts/docker-acceptance.mjs",
     "scripts/container-fixture.mjs",
+    "scripts/docker-preview.mjs",
   ])
     await writeFile(join(root, name), name);
   await writeFile(
     join(root, "package.json"),
     JSON.stringify({ version: "0.2.0" }),
+  );
+  await writeFile(
+    join(root, "package-lock.json"),
+    JSON.stringify({
+      version: "0.2.0",
+      packages: { "": { version: "0.2.0" } },
+    }),
   );
   return root;
 }
@@ -109,11 +118,17 @@ test("Docker timeout and cancellation terminate processes and propagate failure"
       return child;
     },
   });
-  await assert.rejects(run(["version"], { timeoutMs: 10 }), /timed out/);
+  await assert.rejects(
+    run(["version"], { timeoutMs: 10, label: "Backup verification" }),
+    /Backup verification timed out after 10ms/,
+  );
   const controller = new AbortController();
-  const pending = run(["run"], { signal: controller.signal });
+  const pending = run(["run"], {
+    signal: controller.signal,
+    label: "Backup verification",
+  });
   controller.abort();
-  await assert.rejects(pending, /interrupted/);
+  await assert.rejects(pending, /^Error: Backup verification interrupted$/);
   assert.deepEqual(signals, ["SIGTERM", "SIGTERM"]);
   await assert.rejects(
     run(["run"], { signal: controller.signal }),
@@ -312,5 +327,255 @@ test("cleanup attempts the remaining resources after a Docker process rejection"
   assert.deepEqual(
     calls.map((c) => c.at(-1)),
     ["first", "second", "volume"],
+  );
+});
+
+test("Docker help and invalid commands never invoke Docker or create artifacts", async (t) => {
+  const root = await fixture(t),
+    messages: string[] = [];
+  const options = {
+    root,
+    log: (s: string) => messages.push(s),
+    run: async () => {
+      throw Error("Docker must not run for help");
+    },
+  };
+  await main(undefined, options);
+  await main("help", options);
+  await assert.rejects(main("unknown", options), /docker:help/);
+  assert.match(messages[0]!, /release.*Build, test, tag, then push/);
+  assert.match(messages[0]!, /afbeals\/mytuner:0.2.0/);
+  await assert.rejects(readFile(join(root, "artifacts/docker/accepted.json")), {
+    code: "ENOENT",
+  });
+});
+
+test("release versions require valid SemVer and consistent package and lockfile roots before Docker runs", async (t) => {
+  const root = await fixture(t);
+  assert.equal(await checkVersion(root), "0.2.0");
+  for (const version of ["0.2", "01.2.3", "1.2.3-01", "1.2.3\n", "latest"]) {
+    await writeFile(join(root, "package.json"), JSON.stringify({ version }));
+    await assert.rejects(checkVersion(root), /SemVer/);
+  }
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ version: "0.2.0" }),
+  );
+  await writeFile(
+    join(root, "package-lock.json"),
+    JSON.stringify({
+      version: "0.2.0",
+      packages: { "": { version: "0.2.1" } },
+    }),
+  );
+  let calls = 0;
+  await assert.rejects(
+    main("release", {
+      root,
+      run: async () => {
+        calls++;
+      },
+    }),
+    /versions must match/,
+  );
+  assert.equal(calls, 0);
+  await assert.rejects(readFile(join(root, "artifacts/docker/accepted.json")), {
+    code: "ENOENT",
+  });
+});
+
+test("release version comparison orders numeric and prerelease versions correctly", () => {
+  for (const [a, b, result] of [
+    ["0.2.1", "0.2.0", 1],
+    ["1.0.10", "1.0.9", 1],
+    ["1.0.0", "1.0.0-rc.1", 1],
+    ["1.0.0-rc.2", "1.0.0-rc.10", -1],
+    ["1.0.0-alpha", "1.0.0-alpha.1", -1],
+    ["1.0.0+build.2", "1.0.0+build.1", 0],
+  ] as const)
+    assert.equal(compareVersions(a, b), result);
+});
+
+for (const fails of [false, true])
+  test(`release ${fails ? "stops without promotion after failed acceptance" : "publishes the one tested build without rebuilding"}`, async (t) => {
+    const root = await fixture(t),
+      calls: string[][] = [],
+      logs: string[] = [];
+    let tested = false,
+      latest = `sha256:${"b".repeat(64)}`;
+    const run = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "version")
+        return { code: 0, stdout: JSON.stringify({ Version: "synthetic" }) };
+      if (args[0] === "compose")
+        return { code: 0, stdout: "synthetic-compose" };
+      if (args[0] === "image")
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            {
+              ...inspected,
+              Id: args.at(-1)?.endsWith(":latest") ? latest : imageId,
+              Config: {
+                ...inspected.Config,
+                Labels: {
+                  ...inspected.Config.Labels,
+                  "tv.mytuner.source-digest": await sourceDigest(root),
+                },
+              },
+            },
+          ]),
+        };
+      if (args[0] === "tag") latest = args[1]!;
+      if (args[0] === "push") {
+        assert.equal(tested, true);
+        assert.equal(latest, imageId);
+        const report = JSON.parse(
+          await readFile(join(root, "artifacts/docker/accepted.json"), "utf8"),
+        );
+        assert.equal(report.imageId, imageId);
+        assert.equal(report.sourceDigest, await sourceDigest(root));
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const options = {
+      root,
+      run,
+      log: (s: string) => logs.push(s),
+      accept: async () => {
+        if (fails) throw Error("synthetic acceptance rejected");
+        tested = true;
+      },
+    };
+    if (fails) {
+      await assert.rejects(main("release", options), /acceptance rejected/);
+      assert.equal(
+        calls.some((args) => ["tag", "push"].includes(args[0]!)),
+        false,
+      );
+      await assert.rejects(
+        readFile(join(root, "artifacts/docker/accepted.json")),
+        { code: "ENOENT" },
+      );
+    } else {
+      await main("release", options);
+      assert.deepEqual(
+        calls.filter((args) => args[0] === "push"),
+        [
+          ["push", "afbeals/mytuner:0.2.0"],
+          ["push", "afbeals/mytuner:latest"],
+        ],
+      );
+      assert.match(logs.at(-1)!, /Release 0.2.0 complete/);
+    }
+    assert.equal(
+      calls.filter((args) => args[0] === "buildx" && args[1] === "build")
+        .length,
+      1,
+    );
+  });
+
+test("live Docker progress redacts secrets split across chunks while retaining parseable captured output", async () => {
+  const lines: string[] = [];
+  const run = createRunner({
+    secrets: ["synthetic-password"],
+    onProgress: (s: string) => lines.push(s),
+    spawnProcess() {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        kill: () => void;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => {};
+      queueMicrotask(() => {
+        child.stdout.write("Build stage 1\nBearer pri");
+        child.stdout.write("vate-token\n");
+        child.stderr.write("synthetic-pass");
+        child.stderr.write("word https://private.example/path\n");
+        child.emit("close", 0);
+      });
+      return child;
+    },
+  });
+  const result = await run(["buildx", "build"], { progress: true });
+  assert.match(lines.join(""), /Build stage 1/);
+  assert.match(lines.join(""), /Bearer \[redacted\]/);
+  for (const value of [
+    "private-token",
+    "synthetic-password",
+    "private.example",
+  ])
+    assert.equal(lines.join("").includes(value), false);
+  assert.match(result.stdout, /Build stage 1/);
+});
+
+test("interactive preview reuses only labeled synthetic volumes, binds loopback and preserves data on cancellation", async () => {
+  // @ts-expect-error Portable packaging module is exercised directly.
+  const { preview } = await import("../scripts/docker-preview.mjs");
+  const calls: string[][] = [],
+    messages: string[] = [],
+    controller = new AbortController();
+  const run = async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === "volume" && args[1] === "inspect")
+      return {
+        code: 0,
+        stdout: JSON.stringify([{ Labels: { "tv.mytuner.preview": "1" } }]),
+        stderr: "",
+      };
+    if (args[0] === "run" && args.includes("--init")) {
+      controller.abort();
+      throw Error("Interactive preview interrupted");
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await preview(run, {
+    root: "/synthetic/project",
+    candidate,
+    signal: controller.signal,
+    port: 8877,
+    log: (s: string) => messages.push(s),
+  });
+  const server = calls.find(
+    (args) => args[0] === "run" && args.includes("--init"),
+  )!;
+  assert.ok(server.includes("127.0.0.1:8877:8777"));
+  assert.equal(server.at(-1), imageId);
+  assert.ok(
+    server.includes(
+      "type=volume,source=mytuner-preview-source,target=/fixtures,readonly",
+    ),
+  );
+  assert.ok(calls.some((args) => args[0] === "stop"));
+  assert.ok(calls.some((args) => args[0] === "container" && args[1] === "rm"));
+  assert.equal(
+    calls.some((args) => args[0] === "volume" && args[1] === "rm"),
+    false,
+  );
+  assert.match(messages.join("\n"), /127.0.0.1:8877/);
+});
+
+test("preview rejects unrelated volumes and invalid ports before creating or mounting containers", async () => {
+  // @ts-expect-error Portable packaging module is exercised directly.
+  const { preview } = await import("../scripts/docker-preview.mjs");
+  const calls: string[][] = [];
+  const run = async (args: string[]) => {
+    calls.push(args);
+    return { code: 0, stdout: JSON.stringify([{ Labels: {} }]), stderr: "" };
+  };
+  await assert.rejects(
+    preview(run, { root: "/synthetic", candidate, port: 0 }),
+    /PREVIEW_PORT/,
+  );
+  assert.equal(calls.length, 0);
+  await assert.rejects(
+    preview(run, { root: "/synthetic", candidate }),
+    /not a myTuner preview volume/,
+  );
+  assert.equal(
+    calls.some((args) => args[0] === "run"),
+    false,
   );
 });

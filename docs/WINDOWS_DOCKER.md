@@ -1,6 +1,37 @@
 # Windows 11 Docker build and acceptance
 
-Use the existing Windows Docker Desktop workflow used by the owner's Finapp and Tide projects. No Docker installation on the Mac is required. These instructions and scripts have local command-construction tests; actual Windows container execution remains pending.
+Use the existing Windows Docker Desktop workflow used by the owner's Finapp and Tide projects. No Docker installation on the Mac is required. The first reported Windows run built successfully and passed storage, runtime, bootstrap and media gates, then timed out during backup verification. Full Windows acceptance remains pending; rerun with the 0.2.1 read-only verification fix.
+
+## Docker shortcuts
+
+Run `npm run docker:help` (or `node scripts/docker.mjs --help`) for safe command help; it does not invoke Docker or create artifacts.
+
+| Command                  | Behavior                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `npm run docker:build`   | Build/load the package-version Linux/amd64 image; show build progress.                                      |
+| `npm run docker:test`    | Run automated disposable acceptance; show each named gate and write its JSON report.                        |
+| `npm run docker:tag`     | Tag the exact accepted image as `latest`.                                                                   |
+| `npm run docker:push`    | Publish accepted version and `latest`, with progress and an image/tag summary.                              |
+| `npm run docker:release` | Build → test → tag → push. No second build after acceptance; failures stop the sequence.                    |
+| `npm run docker:preview` | Run the current versioned image at `http://127.0.0.1:8877/` with persistent synthetic data.                 |
+| `npm run docker:check`   | Check SemVer and both package-lock root versions; `-- --base origin/main` also requires a version increase. |
+
+Release/push use existing Docker Hub authentication. A GitHub PAT is separate and does not authenticate image publication. Neither command changes the Unraid installation automatically. Version is taken from package.json; the CLI does not bump versions or make Git tags. CI validates package consistency and requires PR versions to be higher than their base.
+
+### Interactive local preview
+
+Build first, then run `npm run docker:preview`. First-run credentials are `preview` / `synthetic-preview-password`; later launches preserve existing accounts. In Sources, `/fixtures` contains one synthetic video with metadata and embedded captions. Use the browser setup flow to create a profile/channel. The preview does not read `.env` or mount household shares.
+
+The four named volumes `mytuner-preview-source`, `mytuner-preview-data`, `mytuner-preview-generated` and `mytuner-preview-cache` retain data after Ctrl+C. The command refuses existing volumes without its preview ownership label. It stops/removes only its own temporary containers; it never prunes Docker or removes preview data automatically. Bootstrap and service use the image's non-root identity; only initialization of these owned synthetic volumes uses a root helper.
+
+To choose a different local port in PowerShell:
+
+```powershell
+$env:MYTUNER_PREVIEW_PORT = "8878"
+npm run docker:preview
+```
+
+Preview is an interactive inspection command, separate from automated `docker:test`. It does not grant acceptance or publish an image.
 
 ## Before building
 
@@ -52,7 +83,7 @@ A passed automated subset is permission to continue the deployment rehearsal. It
 
 ## Transfer the tested image
 
-Image publication is a deliberate later operator action. The local scripts never log in or publish automatically.
+Image publication is an explicit operator action. Build/test/preview do not publish or log in. `docker:push` and `docker:release` publish when explicitly invoked.
 
 When publishing is authorized, first promote the accepted image and then push:
 
@@ -74,6 +105,14 @@ Get-FileHash ".\mytuner-$myTunerVersion.tar" -Algorithm SHA256
 Keep the large archive outside the checkout afterward. Transfer it privately and run `docker image load --input /actual/path/mytuner-VERSION.tar` on Unraid. Verify the loaded image ID equals the accepted report. A Windows-local image is not automatically installed on Unraid. Do not rebuild between acceptance and transfer.
 
 Use [deployment](DEPLOYMENT.md) for actual Unraid mounts, bootstrap and operation. Keep the matching checkout/Compose file for one-off maintenance commands. For the accepted-image route, use `docker compose up -d --no-build`; do not accidentally replace it with a locally rebuilt candidate.
+
+## Backup verification timeout after a successful build
+
+A successful build does not establish runtime acceptance. The initial reported Windows failure passed `disposable-storage`, `runtime-artifact`, `bootstrap-health-assets-auth` and `scan-range-hls-captions-generation`, then hit the 60-second limit in `exclusive-owner-backup-verification`. A present `snapshot` with absent `backupSchema` identifies the verification command. Cleanup passed.
+
+Version 0.2.1 stages the standalone database, manifest and optional key into private writable scratch before SQLite validation. Original backup files and mounts remain read-only; fingerprints still bracket verification and reject changed inputs/nonempty WAL bundles. The local regression demonstrates the old read-only failure and validates the repair. Full Windows acceptance must still be rerun there. Named errors now distinguish e.g. `Backup verification timed out after 60000ms` from interruption without printing credential arguments.
+
+After updating the checkout, run `npm run docker:build` and `npm run docker:test` again. The source/image identity changed, so the old image and failed report cannot be promoted. Keep the normal Docker build cache. Inspect the newest acceptance JSON, including `error`, `gates`, `snapshot`, `backupSchema` and `cleanup`, if another gate fails. Do not raise deadlines or mark the image accepted manually.
 
 ## Common failures
 

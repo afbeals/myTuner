@@ -1,6 +1,6 @@
 {
   "name": "mytuner",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -32,7 +32,12 @@
     "test:ui": "playwright test",
     "test:ui:update": "playwright test --update-snapshots",
     "test:tv": "node e2e/tv-smoke.mjs",
-    "dev:demo": "npm run build && tsx e2e/server.ts --demo"
+    "dev:demo": "npm run build && tsx e2e/server.ts --demo",
+    "docker": "node scripts/docker.mjs",
+    "docker:release": "node scripts/docker.mjs release",
+    "docker:preview": "node scripts/docker.mjs preview",
+    "docker:check": "node scripts/docker.mjs check",
+    "docker:help": "node scripts/docker.mjs --help"
   },
   "dependencies": {
     "@fastify/static": "^10.1.10",

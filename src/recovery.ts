@@ -1,3 +1,4 @@
+import { applicationVersion } from "./version.js";
 import { backup, DatabaseSync } from "node:sqlite";
 import {
   mkdir,
@@ -485,7 +486,29 @@ export async function verifyApplicationBackup(
       return hash.digest("hex");
     };
     const before = await fingerprint();
-    await installBundle(scratch, resolve(directory), true);
+    // WAL-format SQLite files may need bookkeeping writes even when opened
+    // read-only. Keep all SQLite access in private writable scratch storage.
+    const input = join(scratch, "input");
+    await mkdir(input, { mode: 0o700 });
+    for (const name of ["manifest.json", "mytuner.db", "integration.key"]) {
+      signal?.throwIfAborted();
+      try {
+        await copyFile(join(directory, name), join(input, name));
+        await chmod(join(input, name), 0o600);
+      } catch (error) {
+        if (
+          name !== "integration.key" ||
+          !(
+            error instanceof Error &&
+            "code" in error &&
+            error.code === "ENOENT"
+          )
+        )
+          throw error;
+      }
+    }
+    signal?.throwIfAborted();
+    await installBundle(scratch, input, true);
     signal?.throwIfAborted();
     if (before !== (await fingerprint()))
       throw Error("Backup changed during verification; retry");
@@ -494,7 +517,7 @@ export async function verifyApplicationBackup(
       format: 1,
       sourceSchemaVersion: manifest.schemaVersion,
       checkedSchemaVersion: schemaVersion,
-      validatorVersion: "0.2.0",
+      validatorVersion: applicationVersion,
       checkedAt: new Date().toISOString(),
       fingerprint: before,
     };

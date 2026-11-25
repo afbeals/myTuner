@@ -1,3 +1,4 @@
+import { applicationVersion } from "./version.js";
 import { reconcileAssets } from "./asset-reconciliation.js";
 import { registerSubtitleRoutes } from "./subtitle-routes.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
@@ -269,7 +270,7 @@ export function createServer(
       status: "ok",
       service: "mytuner",
       apiVersion: 1,
-      version: "0.2.0",
+      version: applicationVersion,
       phase: options.webRoot ? "standalone-clients" : "non-ui-foundation",
     };
   });

@@ -6,6 +6,7 @@ import { randomUUID, randomBytes, createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
+  chmod,
   readFile,
   readdir,
   writeFile,
@@ -662,6 +663,33 @@ for (const encrypted of [false, true])
       );
     }
   });
+test("I38 verifies a read-only standalone WAL-format backup without creating input sidecars", async (t) => {
+  const f = await bundle(t, true);
+  // A standalone snapshot needs no SQLite bookkeeping files from its creator.
+  await rm(join(f.snapshot, "mytuner.db-wal"), { force: true });
+  await rm(join(f.snapshot, "mytuner.db-shm"), { force: true });
+  const original = await hashes(f.snapshot),
+    live = await readFile(join(f.root, "mytuner.db")),
+    names = await readdir(f.snapshot);
+  for (const name of names) await chmod(join(f.snapshot, name), 0o400);
+  await chmod(f.snapshot, 0o500);
+  try {
+    if (process.platform !== "win32" && process.getuid?.() !== 0)
+      await assert.rejects(
+        writeFile(join(f.snapshot, "must-not-exist"), "denied"),
+        { code: "EACCES" },
+      );
+    const result = await verifyApplicationBackup(f.snapshot);
+    assert.equal(result.status, "valid");
+    assert.equal(result.checkedSchemaVersion, schemaVersion);
+    assert.deepEqual(await hashes(f.snapshot), original);
+    assert.deepEqual(await readFile(join(f.root, "mytuner.db")), live);
+  } finally {
+    await chmod(f.snapshot, 0o700);
+    for (const name of await readdir(f.snapshot))
+      await chmod(join(f.snapshot, name), 0o600);
+  }
+});
 test("I38 rejects corrupt, future, manifest mismatch and required key errors; migrations affect scratch only", async (t) => {
   const f = await bundle(t, true),
     db = await readFile(join(f.snapshot, "mytuner.db")),

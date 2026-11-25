@@ -1,6 +1,6 @@
 # Standalone Docker and Unraid deployment
 
-Status: version 0.2.0 includes the server, browser manager/player and a locally built native TV POC APK. Docker is unavailable in the implementation environment, so image build/runtime and Unraid permissions have not been validated. No image has been published. Actual household deployment and device acceptance remain open.
+Status: server/browser version 0.2.1 includes the server, browser manager/player and a locally built native TV POC APK. Docker is unavailable in the implementation environment, so image build/runtime and Unraid permissions have not been validated. No image has been published. Actual household deployment and device acceptance remain open.
 
 Read [OPERATIONS.md](OPERATIONS.md) for onboarding, budgets, cleanup, backup/restore and diagnosis; [ARCHITECTURE.md](ARCHITECTURE.md) explains process/storage boundaries.
 
@@ -8,7 +8,7 @@ Read [OPERATIONS.md](OPERATIONS.md) for onboarding, budgets, cleanup, backup/res
 
 Use the established **Windows 11 Docker Desktop → tested Linux/amd64 image → deliberate transfer → Unraid** route. [Windows build and acceptance](WINDOWS_DOCKER.md) gives PowerShell commands, the disposable synthetic harness, report/skip interpretation and same-image promotion checks. [Pilot acceptance](PILOT_ACCEPTANCE.md) separates Windows packaging, Unraid storage/recovery and physical TV gates.
 
-`docker:build` builds the versioned candidate; `docker:test` terminates with a pass/fail report. It uses unique disposable named volumes, not `docker-data` or `.env`. `docker:tag` and `docker:push` require that exact accepted image/source and reject stale tags. Publication is a later explicit action. No Docker execution or publication is claimed here.
+`docker:release` runs build → automated acceptance → tag → push, stopping before publication on failure. It publishes to Docker Hub only when explicitly invoked. `docker:preview` runs a persistent loopback-only synthetic preview; `docker:help` describes all commands, and `docker:check` validates package/lockfile versions. `docker:build` builds the versioned candidate; `docker:test` terminates with a pass/fail report. It uses unique disposable named volumes, not `docker-data` or `.env`. `docker:tag` and `docker:push` require that exact accepted image/source and reject stale tags. Publication is a later explicit action. No Docker execution or publication is claimed here.
 
 ## Unraid mounts
 
