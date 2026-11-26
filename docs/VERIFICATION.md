@@ -15,6 +15,8 @@ The owner authorized commit/push/PR and CI monitoring. Implementation commit `93
 
 The [initial Actions run](https://github.com/afbeals/myTuner/actions/runs/45758032959) failed workflow validation before jobs ran: the browser cache path referenced `runner.temp` in job-level `env`, where that context is unavailable. Set it in a runner step through `GITHUB_ENV` instead; downstream cache/install/test steps reuse the same path. Existing tests and tolerances remain. Subsequent checks must be read from the PR; no passing hosted result is inferred from the local suite.
 
+The [first valid CI run](https://github.com/afbeals/myTuner/actions/runs/45758277188) passed backend, Linux Docker acceptance, Android, the version check and browser shards 1/2. Browser shard 3 passed 29/30: the new compact-grant test timed out locating the Source select by exact label after its options had loaded. The downloaded trace/page snapshot shows the populated `combobox "Source"`; querying the enclosing label text was timing-dependent. Use its accessible role/name and wait for the expected option before selection. This also explains the dependent browser aggregate failure. The correction changes test synchronization only, with no extra retries, higher timeouts, skipped tests or new baselines.
+
 ## Current performance, setup and large-library verification — 2026-11-25
 
 Local feature branch **`fix/source-management-library-performance`**, server/browser **0.2.2**, schema **19**, native **0.2.0**. All implementation remains local and uncommitted. No Docker image, PR, registry publication or deployment was performed in this pass. No host program was installed or downloaded; emulator work remains deferred.

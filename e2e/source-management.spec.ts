@@ -177,9 +177,14 @@ test("profile library grants show compact source and subfolder rows with a named
     name: "Manage Living Room",
     exact: true,
   });
-  await dialog
-    .getByLabel("Source", { exact: true })
-    .selectOption({ label: "TV shows" });
+  const sourceChoice = dialog.getByRole("combobox", {
+    name: "Source",
+    exact: true,
+  });
+  await expect(
+    sourceChoice.getByRole("option", { name: "TV shows", exact: true }),
+  ).toHaveCount(1);
+  await sourceChoice.selectOption({ label: "TV shows" });
   await dialog.getByLabel("Subfolder", { exact: true }).fill("Focused folder");
   await dialog
     .getByRole("button", { name: "Add library grant", exact: true })
