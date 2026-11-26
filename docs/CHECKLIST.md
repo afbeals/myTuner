@@ -420,3 +420,29 @@ The [ranked register](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposit
 
 - [x] N102 Repair read-only backup verification by validating a private writable scratch copy, retaining fingerprint/WAL/key checks and cleanup; reproduce the old failure and pass the readonly regression. Name Docker timeout operations and distinguish cancellation. Full Windows acceptance remains P4b/O08.
 - [x] N103 Deliver Docker release, persistent isolated preview, safe live progress/stage summaries, help without side effects and SemVer/lockfile/PR version checks. Align server/browser, health/validator and Docker defaults at 0.2.1; native APK remains 0.2.0. Docker regression and full backend results are recorded in VERIFICATION.md; Linux container acceptance is added to CI.
+
+## Post-installation source, performance and shutdown fixes — 0.2.2
+
+- [x] N104 Add admin source detail editing and unused-source removal with protected-reference/work guards and no source-file mutation.
+- [x] N105 Indicate saved integration credentials; retain the key for mapping edits, require explicit credentials for a changed destination, and preserve unsaved fields while settings load.
+- [x] N106 Add source-scoped scan success/incomplete/failure feedback and compact named profile-grant rows.
+- [x] N107 Page browser library responses on the server, batch metadata lookups, add schema-17 lookup index, bound/invalidate aggregate caching and expose custom parent-folder selections.
+- [x] N108 Abort active scan probes and begin refresh cancellation during preClose; distinguish exit 137 from confirmed OOM or other-container restarts.
+- [x] N110 Add a searchable, paged catalog-backed subfolder picker to profile grants and generated-asset scope; retain manual entry and source-change reset without filesystem rescans.
+- [x] N111 Parallelize browser CI in three isolated file shards, retain its required-check aggregate, cache Chromium/Docker layers and cancel redundant/obsolete runs without removing tests. Hosted timing confirmation remains external.
+- [x] N109 Complete the expanded local gates: 421 backend tests, 99 browser journeys/83 PNG baselines, typecheck/production build, compiled lifecycle/worker smoke, formatting and documentation hygiene. Exact evidence is in VERIFICATION.md; Docker/Unraid remains separate.
+
+- [x] N112 Investigate remaining read/search/write/scan costs and setup selectors/prefill using source inspection, SQLite query plans, synthetic catalog measurements and upstream documentation; record implementation boundaries in OPERATIONS.md.
+- [x] N113 Implement and locally verify batched/paged reads, measured indexes, unchanged-scan write avoidance, output accounting and shared background I/O admission. Target-storage/playback interference remains N117; local evidence is not a household HDD guarantee.
+- [x] N114 Implement mounted-directory suggestions, cached provider roots/mapping previews, explicit saved-connection reuse and metadata/subtitle choices/presets. Parser/provider fixtures pass without Docker-daemon access or automatic share discovery; installed-provider acceptance remains N117.
+
+- [x] N115 Record the owner-provided Unraid 7.1.2/i5-12600K/shared-RAM baseline and interpret zero/cumulative Docker statistics without inferring a restart.
+- [x] N116 Complete integrated performance/setup/diagnostic and visual verification, review generated-path and shutdown corrections, and reconcile docs at schema 19. Local results: 421 backend, 99 browser/83 PNGs, builds/types/smokes and hygiene pass.
+- [ ] N117 Run actual Linux image acceptance and controlled Unraid HDD/shared-memory load checks; synthetic Mac tests are not target-host passes.
+
+## Large-library and directory-check follow-up — 0.2.2
+
+- [x] N118 Persist a compact account-independent catalog projection with bounded resumable backfill, coalesced incremental updates, deletions and atomic revision publication; preserve grouping/search/display semantics.
+- [x] N119 Route production library/media/options pages through one bounded read-only worker; preserve device/PIN/grant checks, disconnect cancellation, main-thread responsiveness and shutdown ordering.
+- [x] N120 Add explicit read-only directory validation with bounded extension samples, honest incomplete feedback and stale-draft/authority guards; do not traverse while typing/opening.
+- [x] N121 Verify file-backed 8k+ mixed catalogs beyond the old raw-metadata limit, permission/parity/cancellation/failure/restart behavior, compiled worker loading and browser/visual regressions. The separate 9k fixture includes 8k TV episodes; measurements and operator limits are in VERIFICATION.md/LARGE_LIBRARY.md. Target-host timing remains N117.

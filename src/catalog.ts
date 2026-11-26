@@ -11,14 +11,53 @@ import {
   dirname,
 } from "node:path";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isDeepStrictEqual } from "node:util";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import type { Store } from "./database.js";
 import type { Media, Source, SourceKind } from "./domain.js";
 import { invariant } from "./domain.js";
 import { inspectLocalMetadata } from "./local-metadata.js";
 import { normalizeSubtree } from "./security.js";
 
-const execute = promisify(execFile);
+// execFile's AbortError callback can precede process close. Track close, and
+// escalate a stubborn child, before releasing the scanner's background slot.
+async function executeProbe(
+  path: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    let stdout = "",
+      failure: Error | null = null;
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    const child = execFile(
+      "ffprobe",
+      ["-v", "error", "-show_format", "-show_streams", "-of", "json", path],
+      { timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
+      (error, output) => {
+        failure = error;
+        stdout = output;
+      },
+    );
+    const terminate = () => {
+      child.kill("SIGTERM");
+      escalation ??= setTimeout(() => child.kill("SIGKILL"), 2000);
+      escalation.unref();
+    };
+    const deadline = setTimeout(terminate, 30000);
+    deadline.unref();
+    signal?.addEventListener("abort", terminate, { once: true });
+    child.once("close", () => {
+      clearTimeout(deadline);
+      clearTimeout(escalation);
+      signal?.removeEventListener("abort", terminate);
+      if (signal?.aborted) reject(signal.reason);
+      else if (failure) reject(failure);
+      else resolve(stdout);
+    });
+    if (signal?.aborted) terminate();
+  });
+}
 export const mediaExtensions = new Set([
   ".mp4",
   ".mkv",
@@ -129,12 +168,12 @@ export interface Inspection {
   }[];
   format: string;
 }
-export async function probeMedia(path: string): Promise<Inspection> {
-  const { stdout } = await execute(
-    "ffprobe",
-    ["-v", "error", "-show_format", "-show_streams", "-of", "json", path],
-    { timeout: 30000, maxBuffer: 4 * 1024 * 1024 },
-  );
+export async function probeMedia(
+  path: string,
+  signal?: AbortSignal,
+): Promise<Inspection> {
+  signal?.throwIfAborted();
+  const stdout = await executeProbe(path, signal);
   const value = JSON.parse(stdout) as {
     format?: { duration?: string; format_name?: string };
     streams?: {
@@ -189,8 +228,12 @@ export interface ScanResult {
 export async function scanSource(
   store: Store,
   source: Source,
-  probe: (path: string) => Promise<number | Inspection> = probeMedia,
+  probe: (
+    path: string,
+    signal?: AbortSignal,
+  ) => Promise<number | Inspection> = probeMedia,
   signal?: AbortSignal,
+  checkpoint: () => Promise<void> = async () => {},
 ): Promise<ScanResult> {
   const result: ScanResult = {
     seen: 0,
@@ -200,9 +243,11 @@ export async function scanSource(
     errors: [],
   };
   const seen = new Set<string>();
-  const subtitles = new SubtitleDiscovery(signal);
+  const subtitles = new SubtitleDiscovery(signal, true);
   // Enumerate completely before marking any prior files missing. Offline/partial scans preserve availability.
   async function walk(directory: string): Promise<void> {
+    await checkpoint();
+    signal?.throwIfAborted();
     let entries;
     try {
       entries = await readdir(directory, { withFileTypes: true });
@@ -217,11 +262,13 @@ export async function scanSource(
     entries.sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { numeric: true }),
     );
+    const directoryNames = new Set(entries.map((entry) => entry.name));
     const singleVideo =
       entries.filter(
         (e) => e.isFile() && mediaExtensions.has(extname(e.name).toLowerCase()),
       ).length === 1;
     for (const entry of entries) {
+      await checkpoint();
       if (signal?.aborted) {
         result.complete = false;
         return;
@@ -250,6 +297,7 @@ export async function scanSource(
             source,
             rel,
             singleVideo,
+            directoryNames,
           ),
           local = localResult.data;
         const previous = JSON.parse(current?.metadata_json ?? "{}") as Record<
@@ -284,17 +332,22 @@ export async function scanSource(
           current.mtime_ms === info.mtimeMs &&
           current.available
         ) {
-          store.db
-            .prepare("UPDATE media SET metadata_json=?,title=? WHERE id=?")
-            .run(
-              JSON.stringify(data),
-              integrated ? current.title : String(local.title),
-              current.id,
-            );
-          await subtitles.check(store, current.id);
+          const title = integrated ? current.title : String(local.title);
+          if (
+            current.title !== title ||
+            !isDeepStrictEqual(JSON.parse(current.metadata_json), data)
+          )
+            store.db
+              .prepare("UPDATE media SET metadata_json=?,title=? WHERE id=?")
+              .run(JSON.stringify(data), title, current.id);
+          await subtitles.checkScanned(store, current.id, {
+            path: safe,
+            size: info.size,
+            mtimeMs: info.mtimeMs,
+          });
           continue;
         }
-        const inspected = await probe(safe);
+        const inspected = await probe(safe, signal);
         const duration =
           typeof inspected === "number" ? inspected : inspected.durationMs;
         if (typeof inspected !== "number")
@@ -329,7 +382,11 @@ export async function scanSource(
         const cataloged = store.db
           .prepare("SELECT id FROM media WHERE source_id=? AND relative_path=?")
           .get(source.id, rel)!;
-        await subtitles.check(store, String(cataloged.id));
+        await subtitles.checkScanned(store, String(cataloged.id), {
+          path: safe,
+          size: info.size,
+          mtimeMs: info.mtimeMs,
+        });
         result.updated++;
       } catch {
         result.complete = false;
@@ -340,20 +397,38 @@ export async function scanSource(
       }
     }
   }
-  await walk(source.root_path);
-  if (result.complete)
-    store.transaction(() => {
-      const rows = store.db
-        .prepare(
-          "SELECT id,relative_path FROM media WHERE source_id=? AND available=1",
-        )
-        .all(source.id) as { id: string; relative_path: string }[];
-      const mark = store.db.prepare("UPDATE media SET available=0 WHERE id=?");
-      for (const row of rows)
-        if (!seen.has(row.relative_path)) {
+  try {
+    await walk(source.root_path);
+  } finally {
+    subtitles.flushChecks(store);
+  }
+  if (signal?.aborted) result.complete = false;
+  if (result.complete) {
+    const rows = store.db
+      .prepare(
+        "SELECT id,relative_path FROM media WHERE source_id=? AND available=1",
+      )
+      .all(source.id) as { id: string; relative_path: string }[];
+    const missing = rows.filter((row) => !seen.has(row.relative_path));
+    const mark = store.db.prepare(
+      "UPDATE media SET available=0 WHERE id=? AND available=1",
+    );
+    // Enumeration is complete before applying any removals. Every short batch
+    // has that same evidence; cancellation can leave later batches for retry.
+    for (let offset = 0; offset < missing.length; offset += 64) {
+      await checkpoint();
+      if (signal?.aborted) {
+        result.complete = false;
+        break;
+      }
+      store.transaction(() => {
+        for (const row of missing.slice(offset, offset + 64)) {
           mark.run(row.id);
           result.missing++;
         }
-    });
+      });
+      await yieldTurn();
+    }
+  }
   return result;
 }

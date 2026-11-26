@@ -61,21 +61,21 @@ There is no Redis, external job broker, cloud database, search service, paid met
 
 ## Internal module map
 
-| Area                    | Main files                                                         | Responsibility                                                                                  |
-| ----------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| Startup and composition | `main.ts`, `server.ts`                                             | Settings, path validation, process lock, service construction, routes, maintenance and shutdown |
-| Domain and contracts    | `domain.ts`, `contracts.ts`, `public-json.ts`, `channel-label.ts`  | Internal models, request validation, core JSON Schemas and public response normalization        |
-| Persistence             | `database.ts`                                                      | Append-only schema migrations, WAL, foreign keys and synchronous transactions/savepoints        |
-| Identity                | `security.ts`, `identity.ts`, `identity-routes.ts`                 | Accounts, credentials, sessions, roles, memberships, PINs and pairing                           |
-| Access lifecycle        | `access.ts`                                                        | Active stream checks and revocation cleanup                                                     |
-| Catalog                 | `catalog.ts`, `local-metadata.ts`                                  | Contained reads, file identity/fingerprints, ffprobe and local metadata                         |
-| Integrations            | `integrations.ts`, `refresh.ts`, `artwork.ts`                      | Read-only upstream import, encrypted settings, refresh and restricted artwork proxy             |
-| Library                 | `library.ts`, `foundation-routes.ts`                               | Authorized discovery, dynamic selections and reference collections                              |
-| Scheduling              | `scheduler.ts`, `programming.ts`                                   | Rotation algorithm, persisted decisions, revisions, preview and rolling extension               |
-| Playback                | `playback.ts`, `streaming.ts`, `subtitles.ts`, `ranges.ts`         | Per-device clocks, direct ranges, HLS negotiation/conversion and text tracks                    |
-| Generated outputs       | `generation.ts`, `storage.ts`                                      | Persisted jobs, presets, disk budgets, atomic assets and stale cleanup                          |
-| Recovery                | `backup.ts`, `recovery.ts`, `runtime-lock.ts`                      | Consistent snapshots, offline staged restore, ownership and interrupted recovery                |
-| Executables             | `bootstrap.ts`, `backup-cli.ts`, `verify-cli.ts`, `restore-cli.ts` | Admin creation, application backup, scratch verification and restore                            |
+| Area                    | Main files                                                                         | Responsibility                                                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Startup and composition | `main.ts`, `server.ts`                                                             | Settings, path validation, process lock, service construction, routes, maintenance and shutdown                 |
+| Domain and contracts    | `domain.ts`, `contracts.ts`, `public-json.ts`, `channel-label.ts`                  | Internal models, request validation, core JSON Schemas and public response normalization                        |
+| Persistence             | `database.ts`                                                                      | Append-only schema migrations, WAL, foreign keys and synchronous transactions/savepoints                        |
+| Identity                | `security.ts`, `identity.ts`, `identity-routes.ts`                                 | Accounts, credentials, sessions, roles, memberships, PINs and pairing                                           |
+| Access lifecycle        | `access.ts`                                                                        | Active stream checks and revocation cleanup                                                                     |
+| Catalog                 | `catalog.ts`, `local-metadata.ts`, `source-management.ts`, `source-directories.ts` | Contained reads, cancellable inspection, source lifecycle and catalog-backed directory choices                  |
+| Integrations            | `integrations.ts`, `refresh.ts`, `artwork.ts`                                      | Read-only upstream import, encrypted settings, refresh and restricted artwork proxy                             |
+| Library                 | `library.ts`, `library-page.ts`, `foundation-routes.ts`                            | Authorized discovery, bounded cached projections, paged responses, dynamic selections and reference collections |
+| Scheduling              | `scheduler.ts`, `programming.ts`                                                   | Rotation algorithm, persisted decisions, revisions, preview and rolling extension                               |
+| Playback                | `playback.ts`, `streaming.ts`, `subtitles.ts`, `ranges.ts`                         | Per-device clocks, direct ranges, HLS negotiation/conversion and text tracks                                    |
+| Generated outputs       | `generation.ts`, `storage.ts`                                                      | Persisted jobs, presets, disk budgets, atomic assets and stale cleanup                                          |
+| Recovery                | `backup.ts`, `recovery.ts`, `runtime-lock.ts`                                      | Consistent snapshots, offline staged restore, ownership and interrupted recovery                                |
+| Executables             | `bootstrap.ts`, `backup-cli.ts`, `verify-cli.ts`, `restore-cli.ts`                 | Admin creation, application backup, scratch verification and restore                                            |
 
 `display-metadata.ts` and `metadata-routes.ts` own source-separated display choices, cached integration/manual/local candidates, explicit read-only NFO checks, mirrored metadata roots and revision/fingerprint guards. Schema 14 adds `display_metadata`, channel description/details revision and source metadata-root fields. These presentation values do not change catalog identities, episode ordering, source bytes or schedules. See [metadata editing](METADATA_EDITING.md) for the complete contract.
 
@@ -90,7 +90,7 @@ All listed TypeScript paths are relative to `src/`. [CLIENTS.md](CLIENTS.md) map
 5. Revalidate paths, create writable output directories and load the private integration key. Missing key material for existing connections blocks startup.
 6. Construct services, replay interrupted generation work, register routes and start maintenance/listening.
 
-On SIGTERM/SIGINT the server aborts tracked streams during `preClose`, force-closes remaining HTTP connections without waiting for stalled viewers, stops/awaits workers, closes SQLite and releases its lock. It does not need a viewer to keep scheduling state persistent. Explicit encoders and queued generation tasks have separate lifecycles. Artwork preClose aborts/drains tracked fetches, response readers and pending cache work before close completes; cache publication rechecks shutdown state.
+On SIGTERM/SIGINT the server aborts active source refresh/probe work and tracked streams during `preClose`, force-closes remaining HTTP connections without waiting for stalled viewers, stops/awaits workers, closes SQLite and releases its lock. It does not need a viewer to keep scheduling state persistent. Explicit encoders and queued generation tasks have separate lifecycles. Artwork preClose aborts/drains tracked fetches, response readers and pending cache work before close completes; cache publication rechecks shutdown state.
 
 ## Request and background work
 
@@ -144,3 +144,11 @@ Browser `Inspection.tsx` supplies video details, readiness and collection deleti
 ## External subtitle and storage maintenance services
 
 `subtitle-catalog.ts` and `subtitle-routes.ts` own per-source read-only discovery, revision-guarded preview/association and viewer-safe inspection. `subtitles.ts` converts supported embedded/external text into authenticated source-time WebVTT using shared encoder admission. `managed-cache.ts` serializes bounded publication/LRU reclamation for separate artwork/subtitle roots. `asset-reconciliation.ts` reviews generated outputs and references before token-guarded apply under generation exclusion. These services mutate only SQLite and configured application outputs. [Subtitle setup](SUBTITLES.md), [API](BACKEND.md), [database](DATABASE.md) and [operations](OPERATIONS.md) describe their contracts and recovery boundaries.
+
+## HDD efficiency and setup composition
+
+The performance update adds `background-work.ts` (serialized optional I/O/checkpoints), `maintenance.ts` (independent schedule/housekeeping/refresh lanes), `output-paths.ts` (anchored/no-link descriptor-based generated publication), `setup-suggestions.ts`/`setup-routes.ts` (cached mount/provider choices and mapping previews), and `diagnose.ts` (read-only operator CLI). Schema 18 supplies content/access revision triggers, observed provider-root storage and hot-path indexes. [Performance plan](PERFORMANCE_PLAN.md) distinguishes implemented changes, measured limits and optional follow-up; [Unraid checks](UNRAID_CHECKS.md) covers the actual target-host boundary.
+
+## Large-library request isolation
+
+Production paged library/media/programming-option reads use `catalog-service.ts` and one `catalog-worker.ts` with a read-only SQLite connection. `catalog-projection.ts` maintains compact persisted rows through the sole main writer in yielded bounded transactions; schema 19 retains backfill/dirty/publication state. `catalog-request.ts` connects disconnection cancellation and final fresh authorization/version validation to HTTP replies. Direct synchronous functions remain compatibility/reference APIs; the production HTTP library endpoint defaults omitted limits to 24 and always uses the reader. See [large-library design](LARGE_LIBRARY.md) for the bounded queues, memory limits and target-host evidence boundary.

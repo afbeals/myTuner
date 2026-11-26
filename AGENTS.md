@@ -12,3 +12,5 @@ Personal project; Pineapple/Airbnb repository rules do not apply here.
 - The owner approved continuing the project within documented acceptable-use conditions and reusing the existing Android SDK/emulator toolchain on 2026-11-08. Obtain approval before installing any additional software or toolchain components.
 
 - The owner deferred remaining emulator verification after tooling stalls on 2026-11-08. Do not resume it as part of the current handoff; record scope/results in docs/VERIFICATION.md and docs/differed.md. Existing toolchain authorization does not authorize additional installations.
+
+- Before downloading any new executable, including an automatic `npx`/`npm exec` fallback, obtain explicit owner approval. Use existing repo-local binaries for tests and set npm offline mode for local verification; never use an installer to make a missing test tool appear.

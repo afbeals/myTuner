@@ -1,9 +1,13 @@
 import { EncoderAdmission } from "./encoder-admission.js";
-import { availableOutputBytes } from "./storage.js";
+import { availableOutputBytes, OutputBudget } from "./storage.js";
+import { BackgroundWork } from "./background-work.js";
+import { OutputPaths } from "./output-paths.js";
+import type { OutputStage } from "./output-paths.js";
+import { fstatSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, realpath, rename, rm, stat } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 import type { Store } from "./database.js";
 import type { Media, Source } from "./domain.js";
 import { DomainError, invariant } from "./domain.js";
@@ -142,12 +146,34 @@ export async function generationPreflight(
     estimatedDurationMs: null,
   };
 }
-export function runFFmpeg(args: string[], signal: AbortSignal): Promise<void> {
+export function runFFmpeg(
+  args: string[],
+  signal: AbortSignal,
+  output?: { fd: number; format: string },
+): Promise<void> {
   return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const actual = [...args];
+    if (output) {
+      actual.pop();
+      actual.push(
+        "-y",
+        "-f",
+        output.format,
+        ...(process.platform === "linux"
+          ? ["/proc/self/fd/3"]
+          : ["-fd", "3", "fd:"]),
+      );
+    }
     const child = spawn(
       "ffmpeg",
-      ["-nostdin", "-hide_banner", "-loglevel", "error", ...args],
-      { stdio: ["ignore", "ignore", "pipe"], signal },
+      ["-nostdin", "-hide_banner", "-loglevel", "error", ...actual],
+      {
+        stdio: output
+          ? ["ignore", "ignore", "pipe", output.fd]
+          : ["ignore", "ignore", "pipe"],
+        signal,
+      },
     );
     // Drain diagnostics without exposing source paths or buffering unbounded output.
     child.stderr?.on("data", () => {});
@@ -182,6 +208,9 @@ export class GenerationRunner {
   private active: { jobId: string; controller: AbortController } | null = null;
   private stopping = false;
   private storageTask: Promise<unknown> | null = null;
+  private storageController: AbortController | null = null;
+  private readonly budget: OutputBudget;
+  private readonly outputs: OutputPaths;
   constructor(
     private readonly store: Store,
     public readonly root: string,
@@ -192,7 +221,10 @@ export class GenerationRunner {
       maxPendingJobs: 25,
     },
     private readonly encoders = new EncoderAdmission(),
+    private readonly background = new BackgroundWork(),
   ) {
+    this.budget = new OutputBudget(root);
+    this.outputs = new OutputPaths(root);
     // Interrupted work is replayable: incomplete outputs were never published.
     store.db.exec(
       "UPDATE generation_jobs SET status='queued' WHERE status='running'; UPDATE generation_items SET status='queued',waiting_reason=NULL WHERE status='running';",
@@ -225,8 +257,14 @@ export class GenerationRunner {
       400,
       "No available catalog files in this scope",
     );
-    await mkdir(this.root, { recursive: true });
-    const root = await realpath(this.root);
+    const root = this.outputs.create(
+      this.store.db
+        .prepare(
+          "SELECT root_path FROM sources UNION SELECT subtitle_root AS root_path FROM sources WHERE subtitle_root IS NOT NULL UNION SELECT metadata_root AS root_path FROM sources WHERE metadata_root IS NOT NULL",
+        )
+        .all()
+        .map((row) => String(row.root_path)),
+    );
     invariant(
       !containsPath(preview.source.root_path, root) &&
         !containsPath(root, preview.source.root_path),
@@ -330,14 +368,22 @@ export class GenerationRunner {
       409,
       "Wait for generation to finish before reconciling outputs",
     );
-    const task = Promise.resolve().then(() =>
-      work(() => invariant(!this.stopping, 503, "Server is stopping")),
+    this.storageController = new AbortController();
+    const task = this.background.run(
+      "reconcile",
+      this.storageController.signal,
+      async () => {
+        this.budget.invalidate();
+        return work(() => invariant(!this.stopping, 503, "Server is stopping"));
+      },
     );
     this.storageTask = task;
     try {
       return await task;
     } finally {
       this.storageTask = null;
+      this.storageController = null;
+      this.budget.invalidate();
       if (!this.stopping) void this.drain().catch(() => {});
     }
   }
@@ -352,6 +398,7 @@ export class GenerationRunner {
   async stop(): Promise<void> {
     this.stopping = true;
     this.active?.controller.abort();
+    this.storageController?.abort();
     await Promise.allSettled([this.running, this.storageTask]);
   }
   private async work(): Promise<void> {
@@ -376,7 +423,9 @@ export class GenerationRunner {
           )
           .run(task.id);
         try {
-          await this.generate(task, job, controller.signal);
+          await this.background.run("generation", controller.signal, () =>
+            this.generate(task, job, controller.signal),
+          );
           this.store.db
             .prepare(
               "UPDATE generation_items SET status='completed' WHERE id=? AND status='running'",
@@ -439,35 +488,32 @@ export class GenerationRunner {
     );
     // Version the fixed presets so changed output settings cannot accidentally reuse old files.
     const fingerprint = assetFingerprint(media, task.kind);
-    const rel = assetRelativePath(media, task.kind),
-      output = join(this.root, rel);
+    const rel = assetRelativePath(media, task.kind);
+    const output = this.outputs.prepare(rel, true);
     const existing = this.store.db
       .prepare(
         "SELECT id FROM generated_assets WHERE media_id=? AND kind=? AND fingerprint=?",
       )
       .get(media.id, task.kind, fingerprint);
-    if (
-      !job.regenerate &&
-      existing &&
-      (await stat(output).catch(() => null))?.isFile()
-    )
-      return;
-    await mkdir(dirname(output), { recursive: true });
-    const temp = join(
-      dirname(output),
-      `.partial-${randomUUID()}.${extensions[task.kind]}`,
-    );
-    const budget = await availableOutputBytes(
-      this.root,
+    const previousOutput = this.outputs.existing(output);
+    if (!job.regenerate && existing && previousOutput) return;
+    const reservation = await this.budget.reserve(
       this.limits.maxBytes,
       this.limits.reserveBytes,
+      () => signal.throwIfAborted(),
     );
-    invariant(
-      budget > 1024 * 1024,
-      507,
-      "Insufficient generated output space or quota",
-    );
-    const maxOutput = Math.min(budget, 5 * 1024 ** 3);
+    let stage: OutputStage;
+    try {
+      this.outputs.check(output);
+      stage = this.outputs.stage(
+        `.partial-${randomUUID()}.${extensions[task.kind]}`,
+      );
+    } catch (error) {
+      reservation.finish();
+      throw error;
+    }
+    const temp = stage.path;
+    const maxOutput = reservation.bytes;
     const seek = Math.min(10000, Math.floor(media.duration_ms / 2)) / 1000;
     const args =
       task.kind === "thumbnail"
@@ -515,7 +561,8 @@ export class GenerationRunner {
               "+faststart",
               temp,
             ];
-    args.splice(args.length - 1, 0, "-fs", String(maxOutput));
+    args.unshift("-threads", "2", "-filter_threads", "1");
+    args.splice(args.length - 1, 0, "-threads", "2", "-fs", String(maxOutput));
     try {
       signal.throwIfAborted();
       await this.encoders.run(
@@ -528,7 +575,18 @@ export class GenerationRunner {
             "Generation is no longer running",
           );
         },
-        () => this.execute(args, signal),
+        () => {
+          this.outputs.check(output);
+          return this.execute(args, signal, {
+            fd: stage.fd,
+            format:
+              task.kind === "thumbnail"
+                ? "image2pipe"
+                : task.kind === "gif"
+                  ? "gif"
+                  : "mp4",
+          });
+        },
         (waiting) => {
           this.store.db
             .prepare("UPDATE generation_items SET waiting_reason=? WHERE id=?")
@@ -542,12 +600,14 @@ export class GenerationRunner {
         409,
         "Media changed",
       );
+      const outputSize = fstatSync(stage.fd).size;
       invariant(
-        (await stat(temp)).size > 0 && (await stat(temp)).size < maxOutput,
+        outputSize > 0 && outputSize < maxOutput,
         422,
         "Generated output is empty or exceeds quota",
       );
-      await rename(temp, output);
+      this.outputs.publish(stage, output);
+      reservation.finish(outputSize - Number(previousOutput?.size ?? 0));
       this.store.db
         .prepare(
           "INSERT INTO generated_assets(id,media_id,kind,fingerprint,relative_path) VALUES(?,?,?,?,?) ON CONFLICT(media_id,kind,fingerprint) DO UPDATE SET relative_path=excluded.relative_path",
@@ -557,10 +617,14 @@ export class GenerationRunner {
           media.id,
           task.kind,
           fingerprint,
-          relative(this.root, output).split(sep).join("/"),
+          rel.split(sep).join("/"),
         );
     } finally {
-      await rm(temp, { force: true });
+      try {
+        this.outputs.close(stage);
+      } finally {
+        reservation.finish();
+      }
     }
   }
 }

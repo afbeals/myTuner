@@ -31,7 +31,7 @@ Record the exact Sony Bravia model, Android/Google TV version/API level, display
 
 2026-11-25: the owner reported a successful build and four passing acceptance gates, followed by a timeout verifying the backup; cleanup passed. Rerun the full acceptance suite on Windows with the 0.2.1 fix before closing this gate. Linux CI acceptance is separate evidence.
 
-The owner confirmed Docker Desktop is already installed on the Windows machine. Use that existing installation; no Mac Docker installation is planned. Container execution remains unverified until run there. Follow [Windows Docker acceptance](WINDOWS_DOCKER.md).
+The owner confirmed Docker Desktop is already installed on the Windows machine. Use that existing installation; no Mac Docker installation is planned. The owner has subsequently run the existing image on Unraid and confirmed source/metadata loading; complete retained acceptance of the current update remains open. Follow [Windows Docker acceptance](WINDOWS_DOCKER.md).
 
 - [ ] Record Windows/Node/Docker/Compose versions and the active Linux-container context.
 - [ ] Build linux/amd64 once, run the isolated synthetic container acceptance harness and retain its exact accepted image ID/source digest/report.
@@ -60,3 +60,29 @@ The owner confirmed Docker Desktop is already installed on the Windows machine. 
 - [ ] Consider model-specific TV cleanup only with a measured before/after responsiveness comparison.
 
 New host software or toolchain components require explicit owner approval. Existing Android SDK/emulator use is authorized within the previously agreed conditions. Original media remains read-only and credentials/signing keys remain outside Git. Optional unselected feature proposals remain in [the improvement catalog](IMPROVEMENTS.md); this register does not select them.
+
+## Version 0.2.2 target-host follow-up
+
+- [ ] Rebuild/test/publish the 0.2.2 image on the owner’s Windows Docker host; no Docker installation on the Mac is authorized.
+- [ ] Back up existing application data before schema 19, then update through the existing Unraid Docker tab while preserving all mounts, port 8777, private PID namespace and manual startup preferences.
+- [ ] Confirm source edit/remove guards, retained Sonarr/Radarr keys, scan success/incomplete/failure messages, compact grants and paged library speed against the actual large catalog.
+- [ ] Recheck MyTuner-only stop/restart timing during an active scan. The reported exit 137 with OOMKilled=false and unchanged other-container uptimes does not prove OOM or Docker-daemon restart. Collect host events/syslog if the temporary all-zero statistics display repeats; do not restart all containers to investigate it.
+
+- [ ] Confirm the three-shard browser CI wall time and cold/warm Chromium/Buildx cache behavior on GitHub-hosted runners; local shard enumeration proves coverage, not hosted speed or runner availability.
+- [ ] Exercise the catalog-backed subfolder picker with the household source sizes; empty/unscanned folders remain manual entries until discovered through a normal scan.
+
+## Performance and setup implementation acceptance
+
+The owner emphasized HDD efficiency and easier setup. [Operations](OPERATIONS.md#hdd-efficiency-investigation-and-proposed-next-work) ranks observed remaining query/scan/write costs; [selector feasibility](OPERATIONS.md#selector-and-prefill-feasibility) records the source-mount/provider-root/metadata/subtitle selectors now implemented under N113/N114. [Performance status](PERFORMANCE_PLAN.md) now records the changes, persisted compact indexing, worker and directory-check behavior, memory/latency limits and target-host verification. A PostgreSQL/search-server migration, Docker socket access and new host software are not prerequisites.
+
+Hardware baseline is now recorded: Unraid 7.1.2, i5-12600K and 31.13 GiB host RAM shared across containers; see [read-only Unraid checks](UNRAID_CHECKS.md). Actual pool/storage policy, current image acceptance, under-load performance and exact device/provider versions remain separate gates.
+
+## Large-library and directory-check target acceptance
+
+The selected 8k+ improvement is implemented locally in schema 19; it is no longer an unselected cold-index proposal. Before deployment, retain a compatible application backup. After deployment, measure the actual household catalog's first index build and warm searches/pages, peak shared-memory usage, playback segment timing and other-app responsiveness. The synthetic 9k fixture demonstrates behavior beyond the old raw-metadata limit, not an HDD timing guarantee.
+
+- [ ] Verify initial/backfill resume and incremental metadata/title/grant changes on the actual Unraid database without source rescans for library browsing.
+- [ ] Check actual source/NFO/subtitle container paths with the explicit directory-check action, including a missing mount and an incomplete bounded sample; confirm no automatic check while typing.
+- [ ] Measure Linux worker/process memory and HDD shutdown under load. Worker heap settings and the 64 MiB compact budget are not container-wide RAM limits.
+
+Still optional: off-peak background windows to protect workloads beyond myTuner playback; a live filesystem folder browser for unscanned directories; a durable generated-output accounting ledger if reconciliation remains a measured bottleneck; additional search indexes/FTS only after measurement. No new work on these is implied by the completed path check.

@@ -1,3 +1,7 @@
+import { BackgroundStatus } from "./BackgroundStatus";
+import { SourcePathField } from "./SourcePathField";
+import { MetadataIntegration } from "./MetadataIntegration";
+import { SourceDirectory } from "./SourceDirectory";
 import { SubtitleSettings } from "./Subtitles";
 import { EffectiveAccess, ImportReports, bytes } from "./Administration";
 import { MetadataLocation } from "./MetadataEditor";
@@ -288,7 +292,8 @@ function ProfileSettings(props: Workspace & { profile: Profile }) {
       props.version,
     ),
     accounts = useRemote<Account[]>(admin ? "/api/accounts" : null),
-    sources = useRemote<Source[]>(admin ? "/api/sources" : null);
+    sources = useRemote<Source[]>(admin ? "/api/sources" : null),
+    [grantSource, setGrantSource] = useState("");
   const refresh = () => {
     settings.reload();
     props.changed();
@@ -397,7 +402,7 @@ function ProfileSettings(props: Workspace & { profile: Profile }) {
         )}
       </div>
       {admin && (
-        <div className="stack">
+        <div className="stack grant-stack">
           <Load {...settings} retry={settings.reload} />
           <Load {...sources} retry={sources.reload} />
           <Form
@@ -412,50 +417,61 @@ function ProfileSettings(props: Workspace & { profile: Profile }) {
             }}
           >
             <h3>Allowed library</h3>
-            <Select label="Source" name="source" required>
+            <Select
+              label="Source"
+              name="source"
+              required
+              value={grantSource || sources.data?.[0]?.id || ""}
+              onChange={(e) => setGrantSource(e.target.value)}
+            >
               {sources.data?.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}
             </Select>
-            <Field
+            <SourceDirectory
+              sourceId={grantSource || sources.data?.[0]?.id}
               label="Subfolder"
               name="subtree"
-              placeholder="Entire source"
-              hint="Relative folder. Includes nested folders."
+              version={props.version}
             />
             <p className="notice">
               Permissions apply to artwork, search and playback too.
             </p>
           </Form>
           {settings.data?.grants.map((g) => (
-            <section className="panel" key={g.sourceId + g.subtree}>
-              <h3>
-                {sources.data?.find((s) => s.id === g.sourceId)?.name ??
-                  "Source"}
-              </h3>
-              <p>{g.subtree || "Entire source"}</p>
-              <Action
-                secondary
-                danger
-                task={async () => {
-                  if (
-                    !window.confirm(
-                      "Remove this library grant? Current playback may stop.",
+            <section className="grant-row" key={g.sourceId + g.subtree}>
+              <div className="grant-copy">
+                <strong>
+                  {sources.data?.find((s) => s.id === g.sourceId)?.name ??
+                    "Source"}
+                </strong>
+                <span>{g.subtree || "Entire source"}</span>
+              </div>
+              <div className="grant-actions">
+                <Action
+                  label={`Remove grant for ${sources.data?.find((s) => s.id === g.sourceId)?.name ?? "Source"}, ${g.subtree || "entire source"}`}
+                  secondary
+                  danger
+                  task={async () => {
+                    if (
+                      !window.confirm(
+                        "Remove this library grant? Current playback may stop.",
+                      )
                     )
-                  )
-                    return;
-                  await api(
-                    `/api/profiles/${props.profile.id}/grants`,
-                    "DELETE",
-                    g,
-                  );
-                  refresh();
-                }}
-              >
-                Remove grant
-              </Action>
+                      return;
+                    await api(
+                      `/api/profiles/${props.profile.id}/grants`,
+                      "DELETE",
+                      g,
+                    );
+                    refresh();
+                  }}
+                >
+                  Remove grant
+                </Action>
+              </div>
             </section>
           ))}
         </div>
@@ -482,10 +498,19 @@ export function SourcesPage(props: Workspace) {
     ),
     [creating, setCreating] = useState(false),
     [selected, setSelected] = useState<Source | null>(null),
-    [result, setResult] = useState<unknown>(null);
+    [result, setResult] = useState<unknown>(null),
+    [editing, setEditing] = useState<Source | null>(null),
+    [notice, setNotice] = useState<string | null>(null),
+    [scans, setScans] = useState<
+      Record<
+        string,
+        { tone: "pending" | "success" | "warning" | "error"; text: string }
+      >
+    >({});
   const integration = useRemote<{
     provider: string;
     url: string;
+    hasApiKey?: boolean;
     mappings: { from: string; to: string }[];
   } | null>(selected ? `/api/sources/${selected.id}/integration` : null);
   // Keep the open integration draft mounted when sibling source settings refresh
@@ -508,6 +533,12 @@ export function SourcesPage(props: Workspace) {
         </div>
         <button onClick={() => setCreating(true)}>+ Add source</button>
       </header>
+      <BackgroundStatus />
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       <Load {...sources} retry={sources.reload} />
       <div className="stack">
         {sources.data?.map((s) => {
@@ -531,8 +562,41 @@ export function SourcesPage(props: Workspace) {
               <div className="actions">
                 <Action
                   task={async () => {
-                    setResult(await api(`/api/sources/${s.id}/scan`, "POST"));
-                    refresh();
+                    setScans((old) => ({
+                      ...old,
+                      [s.id]: {
+                        tone: "pending",
+                        text: `Scanning ${s.name} and refreshing metadata…`,
+                      },
+                    }));
+                    try {
+                      const scan = await api<{
+                        seen: number;
+                        updated: number;
+                        missing: number;
+                        complete: boolean;
+                        errors: unknown[];
+                        imported?: { matched: number; unmatched: number };
+                      }>(`/api/sources/${s.id}/scan`, "POST");
+                      setResult(scan);
+                      setScans((old) => ({
+                        ...old,
+                        [s.id]: {
+                          tone: scan.complete ? "success" : "warning",
+                          text: `${s.name}: ${scan.complete ? "Scan completed" : "Scan completed with issues"}. ${scan.seen} videos found; ${scan.errors.length} scan errors.${scan.imported ? ` Metadata matched: ${scan.imported.matched}; unmatched: ${scan.imported.unmatched}.` : ""}`,
+                        },
+                      }));
+                    } catch (error) {
+                      setScans((old) => ({
+                        ...old,
+                        [s.id]: {
+                          tone: "error",
+                          text: `${s.name}: Scan failed. ${error instanceof Error ? error.message : "Try again."}`,
+                        },
+                      }));
+                    } finally {
+                      refresh();
+                    }
                   }}
                 >
                   Scan & refresh metadata
@@ -540,7 +604,44 @@ export function SourcesPage(props: Workspace) {
                 <button className="secondary" onClick={() => setSelected(s)}>
                   Configure {s.name}
                 </button>
+                <button
+                  className="secondary"
+                  disabled={scans[s.id]?.tone === "pending"}
+                  onClick={() => setEditing(s)}
+                >
+                  Edit source {s.name}
+                </button>
+                <Action
+                  secondary
+                  danger
+                  label={`Remove source ${s.name}`}
+                  disabled={scans[s.id]?.tone === "pending"}
+                  task={async () => {
+                    if (
+                      !window.confirm(
+                        `Remove source “${s.name}”? Its catalog, integration and profile grants will be removed. Original videos and sidecars stay untouched. Sources referenced by channels or collections cannot be removed.`,
+                      )
+                    )
+                      return;
+                    await api(`/api/sources/${s.id}`, "DELETE");
+                    setNotice(
+                      `Source “${s.name}” removed. Original files were not changed.`,
+                    );
+                    setResult(null);
+                    refresh();
+                  }}
+                >
+                  Remove source
+                </Action>
               </div>
+              {scans[s.id] && (
+                <p
+                  className={scans[s.id]!.tone === "error" ? "error" : "notice"}
+                  role={scans[s.id]!.tone === "error" ? "alert" : "status"}
+                >
+                  {scans[s.id]!.text}
+                </p>
+              )}
             </section>
           );
         })}
@@ -573,12 +674,13 @@ export function SourcesPage(props: Workspace) {
             }}
           >
             <Field label="Source name" name="name" required maxLength={120} />
-            <Field
+            <SourcePathField
               label="Container media path"
               name="root"
+              purpose="source"
               placeholder="/media/shows"
               required
-              hint="Use the path visible inside the Docker container."
+              hint="Use the path visible to this server. Choose a mount or enter a directory manually."
             />
             <Select label="Media type" name="kind">
               <option value="shows">TV shows · Sonarr optional</option>
@@ -593,6 +695,84 @@ export function SourcesPage(props: Workspace) {
             <p className="notice">
               Original videos stay in place. Scanning does not start bulk
               generation.
+            </p>
+          </Form>
+        </Modal>
+      )}
+      {editing && (
+        <Modal
+          title={`Edit source ${editing.name}`}
+          onClose={() => setEditing(null)}
+        >
+          <Form
+            submit="Save source"
+            onSave={async (data) => {
+              const root = value(data, "root"),
+                kind = value(data, "kind");
+              if (
+                (root !== editing.rootPath || kind !== editing.kind) &&
+                !window.confirm(
+                  "Changing the directory or media type resets this source’s catalog, integration and profile grants. Original files stay untouched. Continue?",
+                )
+              )
+                throw new Error(
+                  "Source change canceled. Your edits are still here.",
+                );
+              const updated = await api<Source & { catalogReset: boolean }>(
+                `/api/sources/${editing.id}`,
+                "PATCH",
+                {
+                  name: value(data, "name"),
+                  root,
+                  kind,
+                  recursive: data.has("recursive"),
+                },
+              );
+              setNotice(
+                updated.catalogReset
+                  ? "Source updated. Configure its integration and profile grants, then scan the new location."
+                  : "Source updated. Scan again to apply a changed subfolder scope.",
+              );
+              setEditing(null);
+              setResult(null);
+              refresh();
+            }}
+          >
+            <Field
+              label="Source name"
+              name="name"
+              defaultValue={editing.name}
+              required
+              maxLength={120}
+            />
+            <SourcePathField
+              label="Container media path"
+              name="root"
+              purpose="source"
+              sourceId={editing.id}
+              defaultValue={editing.rootPath ?? ""}
+              required
+              hint="Existing directory visible to this server. Your saved path is retained."
+            />
+            <Select label="Media type" name="kind" defaultValue={editing.kind}>
+              <option value="shows">TV shows · Sonarr optional</option>
+              <option value="movies">Movies · Radarr optional</option>
+              <option value="videos">Custom videos</option>
+              <option value="commercials">Commercials</option>
+            </Select>
+            <label className="check">
+              <input
+                type="checkbox"
+                name="recursive"
+                defaultChecked={Boolean(editing.recursive)}
+              />
+              Include subfolders
+            </label>
+            <p className="notice">
+              Name and scan scope can be edited. Directory and type changes
+              reset the catalog and require the source to be unused by channels,
+              collections and retained playback references. Original files are
+              never moved, edited or deleted.
             </p>
           </Form>
         </Modal>
@@ -631,94 +811,16 @@ export function SourcesPage(props: Workspace) {
             {!integration.loading &&
               !integration.error &&
               ["shows", "movies"].includes(selected.kind) && (
-                <Form
-                  submit="Save metadata integration"
-                  onSave={async (d) => {
-                    await api(
-                      `/api/sources/${selected.id}/integration`,
-                      "PUT",
-                      {
-                        provider:
-                          selected.kind === "shows" ? "sonarr" : "radarr",
-                        url: value(d, "url"),
-                        apiKey: value(d, "key"),
-                        mappings: value(d, "mappings")
-                          .split("\n")
-                          .filter(Boolean)
-                          .map((line) => {
-                            const parts = line.split("=>");
-                            if (parts.length !== 2)
-                              throw new Error(
-                                "Use one provider path => container path per line.",
-                              );
-                            return {
-                              from: parts[0]!.trim(),
-                              to: parts[1]!.trim(),
-                            };
-                          }),
-                      },
-                    );
+                <MetadataIntegration
+                  key={selected.id}
+                  source={selected}
+                  initial={integration.data}
+                  onSaved={() => {
+                    setNotice("Metadata integration updated.");
                     integration.reload();
                     refresh();
                   }}
-                >
-                  <h3>
-                    {selected.kind === "shows" ? "Sonarr" : "Radarr"} metadata
-                  </h3>
-                  <Field
-                    label="Application URL"
-                    name="url"
-                    type="url"
-                    defaultValue={integration.data?.url ?? ""}
-                    required
-                    placeholder="http://192.168.1.10:8989"
-                  />
-                  <Field
-                    label="API key"
-                    name="key"
-                    type="password"
-                    required
-                    autoComplete="off"
-                    hint="Saved encrypted on the server. Enter the key when changing configuration."
-                  />
-                  <label className="field">
-                    <span>Path mappings</span>
-                    <textarea
-                      name="mappings"
-                      required
-                      placeholder="/tv => /media/shows"
-                      defaultValue={
-                        integration.data?.mappings
-                          .map((m) => `${m.from} => ${m.to}`)
-                          .join("\n") ?? ""
-                      }
-                    />
-                  </label>
-                  <p>
-                    One provider path =&gt; container path per line. Metadata
-                    access is read-only.
-                  </p>
-                  <Action
-                    secondary
-                    danger
-                    task={async () => {
-                      if (
-                        window.confirm(
-                          "Remove this metadata integration? Imported metadata will remain.",
-                        )
-                      ) {
-                        await api(
-                          `/api/sources/${selected.id}/integration`,
-                          "DELETE",
-                        );
-                        integration.reload();
-                        refresh();
-                      }
-                    }}
-                  >
-                    Disconnect integration
-                  </Action>
-                </Form>
+                />
               )}
             <Form
               submit="Save automatic refresh"
@@ -1078,7 +1180,8 @@ export function GenerationPage(props: Workspace) {
     [scope, setScope] = useState<Scope | null>(null),
     [preview, setPreview] = useState<GenerationPreview | null>(null),
     [cleanup, setCleanup] = useState<CleanupReview | null>(null),
-    [cleanupBusy, setCleanupBusy] = useState(false);
+    [cleanupBusy, setCleanupBusy] = useState(false),
+    [generationSource, setGenerationSource] = useState("");
   const job = useRemote<Job>(
     selected ? `/api/generation/jobs/${selected}` : null,
     tick,
@@ -1104,6 +1207,7 @@ export function GenerationPage(props: Workspace) {
           </p>
         </div>
       </header>
+      <BackgroundStatus />
       <div className="two-col">
         <Form
           submit="Preview scope"
@@ -1132,17 +1236,24 @@ export function GenerationPage(props: Workspace) {
           {sources.data?.length === 0 && (
             <p>Add a source before generating outputs.</p>
           )}
-          <Select label="Source" name="source" required>
+          <Select
+            label="Source"
+            name="source"
+            required
+            value={generationSource || sources.data?.[0]?.id || ""}
+            onChange={(e) => setGenerationSource(e.target.value)}
+          >
             {sources.data?.map((s) => (
               <option value={s.id} key={s.id}>
                 {s.name}
               </option>
             ))}
           </Select>
-          <Field
+          <SourceDirectory
+            sourceId={generationSource || sources.data?.[0]?.id}
             label="Folder within source"
             name="directory"
-            placeholder="Entire source"
+            version={props.version}
           />
           <label className="check">
             <input type="checkbox" name="recursive" />

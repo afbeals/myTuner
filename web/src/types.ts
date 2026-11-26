@@ -150,6 +150,8 @@ export interface Programming {
   seed: number;
 }
 export interface Library {
+  pagination?: { offset: number; limit: number; total: number };
+  savedCollections?: Collection[];
   sources: Source[];
   shows: {
     key: string;

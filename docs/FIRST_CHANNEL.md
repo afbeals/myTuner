@@ -1,6 +1,6 @@
 # Create your first channel
 
-Use this walkthrough after [installing the server](DEPLOYMENT.md#first-installation-on-unraid) and bootstrapping its first administrator. It takes an empty installation through browser playback, then TV setup. The [temporary demo](DEVELOPMENT.md#local-demo-with-mock-data) already has sources, profiles and a channel; use it to explore without your own media.
+Use this walkthrough after [installing the server](UNRAID_DOCKER_TAB.md) and bootstrapping its first administrator. It takes an empty installation through browser playback, then TV setup. The [temporary demo](DEVELOPMENT.md#local-demo-with-mock-data) already has sources, profiles and a channel; use it to explore without your own media.
 
 ## Before you start
 
@@ -23,7 +23,7 @@ Expected result: the source contains cataloged videos with measured durations. B
 
 1. Open **Profiles → Create profile**. Name it, for example Living Room. Choose a shared room or personal profile; assign the intended owner for a personal profile.
 2. Open **Manage Living Room**. Add the intended account under account access. Select **May manage this profile** only when that account should edit its programming; watching does not require management authority. Administrators create additional accounts in **Accounts**; there is no public signup.
-3. In **Allowed library**, choose the source and select **Add library grant**. Leave **Subfolder** blank for the entire source, or enter a source-relative folder for narrower access. Add separate grants for other sources, including commercials if you want them later.
+3. In **Allowed library**, choose the source and select **Add library grant**. Leave **Subfolder** blank for the entire source, or use **Browse subfolders** to search/select a scanned relative folder for narrower access. Manual entry remains available for folders not yet scanned. Add separate grants for other sources, including commercials if you want them later.
 4. Set the optional **TV PIN** and save it. PINs have 4–8 digits. The PIN protects viewing-profile selection; it is separate from the account password and does not grant library access.
 5. In the browser's **Current profile** selector, choose Living Room. Open **Library** and confirm its permitted content appears. If another account will approve the TV, that account must have access to this profile too.
 

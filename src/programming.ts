@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { compareClips } from "./scheduler.js";
 import type { Group } from "./scheduler.js";
 import { randomUUID } from "node:crypto";
@@ -12,6 +13,7 @@ import {
   sourceById,
   programmingActor,
   canReadMedia,
+  refreshAccount,
 } from "./security.js";
 import { buildSchedule, initialState, resolveLive } from "./scheduler.js";
 import type { Clip, RotationState } from "./scheduler.js";
@@ -33,6 +35,7 @@ export class ProgrammingService {
   private chunk(
     material: ReturnType<ProgrammingService["material"]>,
     config: Programming,
+    entryBudget = 10000,
   ): number {
     let shortest = Infinity;
     for (const group of material.groups)
@@ -48,7 +51,7 @@ export class ProgrammingService {
     );
     return Math.min(
       24 * 3600000,
-      Math.max(1, shortest * Math.max(1, Math.floor(10000 / segments))),
+      Math.max(1, shortest * Math.max(1, Math.floor(entryBudget / segments))),
     );
   }
   private material(
@@ -546,6 +549,28 @@ export class ProgrammingService {
     untilMs = Date.now() + this.defaultHorizonMs,
     revisionId?: string,
   ): void {
+    for (const _ of this.extend(channelId, untilMs, revisionId)) {
+      /* synchronous callers retain their contract */
+    }
+  }
+  async ensureBackground(
+    channelId: string,
+    untilMs = Date.now() + this.defaultHorizonMs,
+    shouldStop: () => boolean = () => false,
+  ): Promise<void> {
+    await setImmediate();
+    if (shouldStop()) return;
+    for (const _ of this.extend(channelId, untilMs, undefined, 1000)) {
+      await setImmediate();
+      if (shouldStop()) return;
+    }
+  }
+  private *extend(
+    channelId: string,
+    untilMs: number,
+    revisionId?: string,
+    entryBudget = 10000,
+  ): Generator<void> {
     const revision = revisionId
       ? (this.store.db
           .prepare(
@@ -569,8 +594,20 @@ export class ProgrammingService {
       .get(revision.author_account_id!) as Account | undefined;
     invariant(account, 409, "Programming author is unavailable");
     const config = programmingSchema.parse(JSON.parse(revision.config_json)),
-      material = this.material(account, config, config.disabledCommercialIds);
-    let state = JSON.parse(revision.state_json!) as RotationState;
+      initialMaterial = this.material(
+        account,
+        config,
+        config.disabledCommercialIds,
+      );
+    let material = initialMaterial;
+    let contentRevision = Number(
+      this.store.db
+        .prepare("SELECT revision FROM catalog_revision WHERE id=1")
+        .get()!.revision,
+    );
+    let authorRole = account.role;
+    let expectedState = revision.state_json!;
+    let state = JSON.parse(expectedState) as RotationState;
     // Materialize bounded batches; this preserves exact random choices across idle periods and restarts.
     let batches = 0;
     while (end < untilMs) {
@@ -579,7 +616,44 @@ export class ProgrammingService {
         503,
         "Schedule catch-up limit reached; retry after maintenance advances it",
       );
-      const chunk = this.chunk(material, config);
+      // A request can extend/edit the revision while background work yields.
+      // Stop rather than overwrite its choices; the next maintenance pass resumes.
+      const currentRevision = this.store.db
+        .prepare("SELECT state_json FROM schedule_revisions WHERE id=?")
+        .get(revision.id);
+      const currentEnd = Number(
+        this.store.db
+          .prepare(
+            "SELECT MAX(end_ms) AS end FROM schedule_entries WHERE revision_id=?",
+          )
+          .get(revision.id)?.end,
+      );
+      if (
+        currentRevision?.state_json !== expectedState ||
+        currentEnd !== end ||
+        (!revisionId && this.active(channelId)?.id !== revision.id)
+      )
+        return;
+      const currentAuthor = refreshAccount(this.store, account);
+      programmingActor(this.store, currentAuthor, config.profileId);
+      const currentContent = Number(
+        this.store.db
+          .prepare("SELECT revision FROM catalog_revision WHERE id=1")
+          .get()!.revision,
+      );
+      if (
+        currentContent !== contentRevision ||
+        currentAuthor.role !== authorRole
+      ) {
+        material = this.material(
+          currentAuthor,
+          config,
+          config.disabledCommercialIds,
+        );
+        contentRevision = currentContent;
+        authorRole = currentAuthor.role;
+      }
+      const chunk = this.chunk(material, config, entryBudget);
       const result = buildSchedule({
         channelId,
         startMs: end,
@@ -601,7 +675,9 @@ export class ProgrammingService {
             .run(JSON.stringify(result.state), channelId);
       });
       state = result.state;
+      expectedState = JSON.stringify(state);
       end = result.entries.at(-1)!.endMs;
+      yield;
     }
   }
   private appendEntries(
@@ -612,10 +688,27 @@ export class ProgrammingService {
     const insert = this.store.db.prepare(
       "INSERT INTO schedule_entries(id,revision_id,channel_id,media_id,program_id,start_ms,end_ms,offset_ms,kind,source_size,source_mtime_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
     );
+    const fingerprints = new Map(
+      this.store.db
+        .prepare(
+          "SELECT id,size,mtime_ms FROM media WHERE id IN (SELECT value FROM json_each(?))",
+        )
+        .all(
+          JSON.stringify([
+            ...new Set(result.entries.map((entry) => entry.mediaId)),
+          ]),
+        )
+        .map((row) => [
+          String(row.id),
+          { size: Number(row.size), mtime_ms: Number(row.mtime_ms) },
+        ]),
+    );
+    const member = this.store.db.prepare(
+      "INSERT OR IGNORE INTO channel_items(channel_id,media_id) VALUES(?,?)",
+    );
+    for (const mediaId of fingerprints.keys()) member.run(channelId, mediaId);
     for (const e of result.entries) {
-      const m = this.store.db
-        .prepare("SELECT size,mtime_ms FROM media WHERE id=?")
-        .get(e.mediaId) as { size: number; mtime_ms: number };
+      const m = fingerprints.get(e.mediaId)!;
       insert.run(
         e.id,
         revisionId,
@@ -629,11 +722,6 @@ export class ProgrammingService {
         m.size,
         m.mtime_ms,
       );
-      this.store.db
-        .prepare(
-          "INSERT OR IGNORE INTO channel_items(channel_id,media_id) VALUES(?,?)",
-        )
-        .run(channelId, e.mediaId);
     }
     const checkpoint = this.store.db.prepare(
       "INSERT INTO schedule_checkpoints(revision_id,program_id,end_ms,state_json) VALUES(?,?,?,?)",

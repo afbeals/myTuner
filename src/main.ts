@@ -51,6 +51,8 @@ const { store, app } = await (async () => {
       cacheRoot,
       logger: true,
       autoMaintenance: true,
+      pauseBackgroundDuringPlayback:
+        process.env.MYTUNER_PAUSE_BACKGROUND_DURING_PLAYBACK !== "false",
       webRoot: resolve("web-dist"),
       integrationKey,
       collectionRetentionDays: Number(

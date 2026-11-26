@@ -6,10 +6,21 @@ import { invariant } from "./domain.js";
 import type { Media } from "./domain.js";
 import { assetFingerprint } from "./generation.js";
 import type { AssetKind } from "./generation.js";
-export async function directoryBytes(root: string): Promise<number> {
-  let total = 0;
+export async function directoryBytes(
+  root: string,
+  check: () => void = () => {},
+): Promise<number> {
+  let total = 0,
+    entries = 0;
   async function walk(path: string) {
+    check();
     for (const name of await readdir(path)) {
+      check();
+      invariant(
+        ++entries <= 100000,
+        507,
+        "Application output exceeds 100,000 entries; reconcile a narrower output root",
+      );
       const child = join(path, name),
         info = await lstat(child);
       invariant(
@@ -33,6 +44,62 @@ export async function availableOutputBytes(
   return Math.floor(
     Math.min(maxBytes - used, fs.bavail * fs.bsize - reserveBytes),
   );
+}
+/** Short-lived accounting for the sole generator; statfs remains fresh per output.
+ * Rebuild after restart, maintenance, failures, 64 outputs or 30 seconds. External
+ * writers can race any quota check; dedicated roots and filesystem free space
+ * remain necessary, just as with a full traversal before every encode.
+ */
+export class OutputBudget {
+  private used: number | null = null;
+  private checkedAt = 0;
+  private publications = 0;
+  private reserved = 0;
+  constructor(private readonly root: string) {}
+  invalidate() {
+    this.used = null;
+  }
+  async reserve(maxBytes: number, reserveBytes: number, check: () => void) {
+    check();
+    if (
+      this.used === null ||
+      this.publications >= 64 ||
+      Date.now() - this.checkedAt >= 30000
+    ) {
+      this.used = await directoryBytes(this.root, check);
+      this.checkedAt = Date.now();
+      this.publications = 0;
+    }
+    const fs = await statfs(this.root);
+    check();
+    const bytes = Math.floor(
+      Math.min(
+        maxBytes - this.used - this.reserved,
+        fs.bavail * fs.bsize - reserveBytes - this.reserved,
+        5 * 1024 ** 3,
+      ),
+    );
+    invariant(
+      bytes > 1024 * 1024,
+      507,
+      "Insufficient generated output space or quota",
+    );
+    this.reserved += bytes;
+    let finished = false;
+    return {
+      bytes,
+      finish: (delta?: number) => {
+        if (finished) return;
+        finished = true;
+        this.reserved -= bytes;
+        if (delta === undefined) this.invalidate();
+        else if (this.used !== null) {
+          this.used = Math.max(0, this.used + delta);
+          this.publications++;
+        }
+      },
+    };
+  }
 }
 export async function validateStorage(
   store: Pick<Store, "db">,

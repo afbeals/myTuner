@@ -329,7 +329,55 @@ export class SubtitleDiscovery {
     string,
     Promise<{ name: string; directory: boolean }[]>
   >();
-  constructor(private readonly signal?: AbortSignal) {}
+  private resolved = new Map<string, ReturnType<typeof resolveSubtitle>>();
+  private canonical = new Map<string, Promise<string>>();
+  private checked = new Map<string, { revision: number; time: number }>();
+  constructor(
+    private readonly signal?: AbortSignal,
+    private readonly scanning = false,
+  ) {}
+  private resolve(source: Source, candidate: ManualSubtitle) {
+    if (!this.scanning) return resolveSubtitle(source, candidate);
+    const key = JSON.stringify([
+      source.root_path,
+      source.subtitle_root,
+      candidate,
+    ]);
+    let pending = this.resolved.get(key);
+    if (!pending) {
+      pending = resolveSubtitle(source, candidate);
+      if (this.resolved.size >= 2048)
+        this.resolved.delete(this.resolved.keys().next().value!);
+      this.resolved.set(key, pending);
+    }
+    return pending;
+  }
+  flushChecks(store: Store) {
+    if (!this.checked.size) return;
+    store.transaction(() => {
+      const update = store.db.prepare(
+        "UPDATE subtitle_checks SET checked_ms=?,success_ms=? WHERE media_id=? AND revision=? AND error IS NULL",
+      );
+      for (const [id, check] of this.checked)
+        update.run(check.time, check.time, id, check.revision);
+    });
+    this.checked.clear();
+  }
+  checkScanned(
+    store: Store,
+    mediaId: string,
+    video: { path: string; size: number; mtimeMs: number },
+  ) {
+    return this.check(
+      store,
+      mediaId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      video,
+    );
+  }
   private list(path: string) {
     let pending = this.directories.get(path);
     if (!pending) {
@@ -364,6 +412,7 @@ export class SubtitleDiscovery {
     expectedRevision?: string,
     manual?: ManualSubtitle,
     fingerprint?: string,
+    inspectedVideo?: { path: string; size: number; mtimeMs: number },
   ) {
     const item = media(store, mediaId);
     const source = sourceById(store, item.source_id);
@@ -391,8 +440,10 @@ export class SubtitleDiscovery {
     >();
     const key = (t: ManualSubtitle) => `${t.rootKind}:${t.relativePath}`;
     try {
-      const input = await safeMediaPath(source, item.relative_path);
-      const video = await stat(input);
+      const input =
+        inspectedVideo?.path ??
+        (await safeMediaPath(source, item.relative_path));
+      const video = inspectedVideo ?? (await stat(input));
       invariant(
         video.size === item.size && video.mtimeMs === item.mtime_ms,
         409,
@@ -427,7 +478,7 @@ export class SubtitleDiscovery {
           ) ?? null;
         let resolved;
         try {
-          resolved = await resolveSubtitle(source, {
+          resolved = await this.resolve(source, {
             ...candidate,
             relativePath,
           });
@@ -493,7 +544,14 @@ export class SubtitleDiscovery {
         const root =
           rootKind === "media" ? source.root_path : source.subtitle_root!;
         const location = join(root, relativeDirectory);
-        const canonical = await realpath(location).catch((error) => {
+        let pending = this.canonical.get(location);
+        if (!pending) {
+          pending = realpath(location);
+          if (this.canonical.size >= 512)
+            this.canonical.delete(this.canonical.keys().next().value!);
+          this.canonical.set(location, pending);
+        }
+        const canonical = await pending.catch((error) => {
           if (optional && error?.code === "ENOENT") return null;
           throw error;
         });
@@ -578,19 +636,51 @@ export class SubtitleDiscovery {
         422,
         "Subtitle history exceeds 2,048 tracks; narrow the source and review associations",
       );
-      store.transaction(() => {
-        const upsert = store.db.prepare(
-          "INSERT INTO subtitle_tracks(media_id,root_kind,relative_path,state_json) VALUES(?,?,?,?) ON CONFLICT(media_id,root_kind,relative_path) DO UPDATE SET state_json=excluded.state_json",
-        );
-        for (const candidate of candidates.values())
-          upsert.run(
-            mediaId,
-            candidate.rootKind,
-            candidate.relativePath,
-            JSON.stringify(candidate),
+      const state = checkState(store, mediaId);
+      const same = (
+        candidate: Omit<ExternalSubtitle, "id" | "index">,
+        old?: ExternalSubtitle,
+      ) => {
+        if (!old) return false;
+        const { id: _id, index: _index, ...value } = old;
+        return JSON.stringify(candidate) === JSON.stringify(value);
+      };
+      const changes = [...candidates.values()].filter(
+        (candidate) =>
+          !same(
+            candidate,
+            previous.find((old) => key(old) === key(candidate)),
+          ),
+      );
+      const missing = previous.filter(
+        (old) =>
+          !candidates.has(key(old)) &&
+          (old.status !== "missing" || old.signature !== signature(source)),
+      );
+      const unchanged =
+        !changes.length &&
+        !missing.length &&
+        state.error === null &&
+        state.success_ms !== null;
+      if (unchanged && this.scanning) {
+        this.checked.set(mediaId, {
+          revision: state.revision,
+          time: Date.now(),
+        });
+        if (this.checked.size >= 64) this.flushChecks(store);
+      } else
+        store.transaction(() => {
+          const upsert = store.db.prepare(
+            "INSERT INTO subtitle_tracks(media_id,root_kind,relative_path,state_json) VALUES(?,?,?,?) ON CONFLICT(media_id,root_kind,relative_path) DO UPDATE SET state_json=excluded.state_json",
           );
-        for (const old of previous)
-          if (!candidates.has(key(old)))
+          for (const candidate of changes)
+            upsert.run(
+              mediaId,
+              candidate.rootKind,
+              candidate.relativePath,
+              JSON.stringify(candidate),
+            );
+          for (const old of missing)
             store.db
               .prepare("UPDATE subtitle_tracks SET state_json=? WHERE id=?")
               .run(
@@ -601,12 +691,12 @@ export class SubtitleDiscovery {
                 }),
                 old.id,
               );
-        store.db
-          .prepare(
-            "INSERT INTO subtitle_checks(media_id,revision,checked_ms,success_ms,error) VALUES(?,1,?,?,NULL) ON CONFLICT(media_id) DO UPDATE SET revision=revision+1,checked_ms=excluded.checked_ms,success_ms=excluded.success_ms,error=NULL",
-          )
-          .run(mediaId, Date.now(), Date.now());
-      });
+          store.db
+            .prepare(
+              "INSERT INTO subtitle_checks(media_id,revision,checked_ms,success_ms,error) VALUES(?,1,?,?,NULL) ON CONFLICT(media_id) DO UPDATE SET revision=revision+1,checked_ms=excluded.checked_ms,success_ms=excluded.success_ms,error=NULL",
+            )
+            .run(mediaId, Date.now(), Date.now());
+        });
     } catch (error) {
       // Do not let stale, cancelled or deauthorized work overwrite a newer check.
       check();

@@ -1,6 +1,6 @@
 # myTuner documentation
 
-This is the entry point for the standalone personal TV project. Version 0.2.0 / schema 16 includes the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. All six selected remaining bugs are fixed. Browser checks pass; native state/font/pairing checks have partial passing evidence. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
+This is the entry point for the standalone personal TV project. Server/browser 0.2.2 / schema 19 and native 0.2.0 include the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. All six selected remaining bugs are fixed. Browser checks pass; native state/font/pairing checks have partial passing evidence. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
 
 See [Windows Docker acceptance](WINDOWS_DOCKER.md), [Unraid/TV pilot gates](PILOT_ACCEPTANCE.md) and [the 58-frame implementation inventory](DESIGN_COVERAGE.md) for the current delivery work.
 
@@ -73,3 +73,10 @@ These guides document the standalone implementation under `src/`. Root legacy in
 When changing behavior, update the relevant reference, checklist and verification evidence together. Keep runtime limits and route details tied to source; describe client or hardware work as pending until accepted. Never put credentials, personal paths, media or live database dumps into documentation examples.
 
 [Browser and TV implementation, controls and build reference](CLIENTS.md) covers the delivered clients.
+
+- [Unraid Docker-tab setup](UNRAID_DOCKER_TAB.md): image publication, exact container-form fields, manual startup, administrator bootstrap, read-only mappings, source/integration setup and deployment troubleshooting.
+
+- [Performance implementation and limits](PERFORMANCE_PLAN.md): measured findings, changes, memory/disk boundaries and remaining choices.
+- [Read-only Unraid checks](UNRAID_CHECKS.md): current hardware baseline, safe diagnostics and controlled target-host acceptance.
+
+[Large-library browsing and directory checks](LARGE_LIBRARY.md) explains persisted indexing, worker requests, resource limits, first/subsequent-run costs and explicit setup-path validation.

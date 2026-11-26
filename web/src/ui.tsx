@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useEffect,
   useId,
   useRef,
@@ -13,9 +15,11 @@ import { useDraftNavigation } from "./navigation";
 export function Field({
   label,
   hint,
+  id: suppliedId,
   ...props
 }: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string }) {
-  const id = useId();
+  const generatedId = useId();
+  const id = suppliedId ?? generatedId;
   return (
     <label className="field" htmlFor={id}>
       <span id={`${id}-label`}>{label}</span>
@@ -71,8 +75,10 @@ export function Action({
   secondary = false,
   danger = false,
   disabled = false,
+  label,
 }: {
   children: ReactNode;
+  label?: string;
   task: () => Promise<unknown>;
   secondary?: boolean;
   danger?: boolean;
@@ -86,6 +92,7 @@ export function Action({
         type="button"
         className={`${secondary ? "secondary" : ""} ${danger ? "danger" : ""}`}
         disabled={busy || disabled}
+        aria-label={label}
         onClick={() => {
           setBusy(true);
           setError(null);
@@ -99,6 +106,10 @@ export function Action({
       <ErrorBox error={error} />
     </>
   );
+}
+const FormDirtyContext = createContext<() => void>(() => {});
+export function useMarkFormDirty() {
+  return useContext(FormDirtyContext);
 }
 export function Form({
   children,
@@ -147,7 +158,9 @@ export function Form({
       onSubmit={(e) => void save(e)}
     >
       <fieldset disabled={busy || disabled}>
-        {children}
+        <FormDirtyContext.Provider value={() => setDirty(true)}>
+          {children}
+        </FormDirtyContext.Provider>
         <ErrorBox error={error} />
         <div className="actions">
           <button type="submit">{busy ? "Saving…" : submit}</button>
@@ -197,7 +210,13 @@ export function useRemote<T>(
       });
     return () => c.abort();
   }, [path, version, tick, retain]);
-  return { data, error, loading, reload: () => setTick((v) => v + 1) };
+  const current = previousPath.current === path;
+  return {
+    data: current ? data : null,
+    error: current ? error : null,
+    loading: Boolean(path) && (loading || !current),
+    reload: () => setTick((v) => v + 1),
+  };
 }
 export function Load({
   loading,

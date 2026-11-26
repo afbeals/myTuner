@@ -17,6 +17,7 @@ import { invariant } from "./domain.js";
 // Serialize publication/reclamation; FFmpeg partials count toward the budget but are never evicted while fresh.
 export class ManagedCache {
   private tail: Promise<unknown> = Promise.resolve();
+  private touched = new Map<string, number>();
   constructor(
     private readonly root: string,
     private readonly budget = 64 * 1024 ** 2,
@@ -57,7 +58,16 @@ export class ManagedCache {
       }
       const bytes = await readFile(path);
       check();
-      await utimes(path, new Date(), new Date());
+      const now = Date.now();
+      if (
+        now - (this.touched.get(name) ?? 0) >=
+        Math.min(60000, this.ttl / 4)
+      ) {
+        await utimes(path, new Date(now), new Date(now));
+        if (this.touched.size >= 512)
+          this.touched.delete(this.touched.keys().next().value!);
+        this.touched.set(name, now);
+      }
       check();
       return bytes;
     });

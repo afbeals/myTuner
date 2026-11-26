@@ -296,6 +296,29 @@ export function withinSubtree(relativePath: string, subtree: string): boolean {
     relativePath.startsWith(subtree + "/")
   );
 }
+// A request-local predicate: callers recheck PIN/profile once, and no grants are
+// retained between requests. Raw grant changes therefore take effect immediately.
+export function createMediaAuthorizer(
+  store: Store,
+  account: Account,
+  profileId: string,
+): (media: Pick<Media, "source_id" | "relative_path">) => boolean {
+  requireProfile(store, account, profileId);
+  if (account.role === "admin") return () => true;
+  const grants = new Map<string, string[]>();
+  for (const row of store.db
+    .prepare("SELECT source_id,subtree FROM source_grants WHERE profile_id=?")
+    .all(profileId)) {
+    const sourceId = String(row.source_id);
+    const paths = grants.get(sourceId) ?? [];
+    paths.push(String(row.subtree));
+    grants.set(sourceId, paths);
+  }
+  return (media) =>
+    (grants.get(media.source_id) ?? []).some((subtree) =>
+      withinSubtree(media.relative_path, subtree),
+    );
+}
 export function canReadMedia(
   store: Store,
   account: Account,
@@ -304,12 +327,12 @@ export function canReadMedia(
 ): boolean {
   requireProfile(store, account, profileId);
   if (account.role === "admin") return true;
-  const grants = store.db
+  return store.db
     .prepare(
       "SELECT subtree FROM source_grants WHERE profile_id=? AND source_id=?",
     )
-    .all(profileId, media.source_id) as { subtree: string }[];
-  return grants.some((g) => withinSubtree(media.relative_path, g.subtree));
+    .all(profileId, media.source_id)
+    .some((row) => withinSubtree(media.relative_path, String(row.subtree)));
 }
 export function visibleChannel(
   store: Store,
@@ -344,24 +367,24 @@ export function requireChannelMedia(
         .prepare("SELECT revision_id FROM active_schedules WHERE channel_id=?")
         .get(channel.id)?.revision_id ?? "",
     );
-  const items = revisionId
-    ? store.db
-        .prepare(
-          "SELECT DISTINCT m.* FROM media m JOIN schedule_entries e ON e.media_id=m.id WHERE e.revision_id=? AND e.end_ms>?",
-        )
-        .all(revisionId, context.positionMs ?? Date.now())
-    : store.db
-        .prepare(
-          "SELECT m.* FROM channel_items ci JOIN media m ON m.id=ci.media_id WHERE ci.channel_id=?",
-        )
-        .all(channel.id);
-  invariant(
-    (items as unknown as Media[]).every((m) =>
-      canReadMedia(store, account, profileId, m),
-    ),
-    404,
-    "Channel not found",
-  );
+  // Administrators have access to every source, including unavailable media.
+  if (account.role === "admin") return;
+  const membership = revisionId
+    ? "JOIN schedule_entries e ON e.media_id=m.id WHERE e.revision_id=? AND e.end_ms>?"
+    : "JOIN channel_items ci ON ci.media_id=m.id WHERE ci.channel_id=?";
+  const parameters = revisionId
+    ? [revisionId, context.positionMs ?? Date.now(), profileId]
+    : [channel.id, profileId];
+  const denied = store.db
+    .prepare(
+      `SELECT 1 FROM media m ${membership}
+    AND NOT EXISTS (SELECT 1 FROM source_grants g
+      WHERE g.profile_id=? AND g.source_id=m.source_id AND
+      (g.subtree='' OR m.relative_path=g.subtree OR substr(m.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))
+    LIMIT 1`,
+    )
+    .get(...parameters);
+  invariant(!denied, 404, "Channel not found");
 }
 export function sourceById(store: Store, id: string): Source {
   const source = store.db

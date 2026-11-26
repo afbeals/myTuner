@@ -1,6 +1,6 @@
 services:
   mytuner:
-    image: afbeals/mytuner:${MYTUNER_VERSION:-0.2.1}
+    image: afbeals/mytuner:${MYTUNER_VERSION:-0.2.2}
     container_name: mytuner
     init: true
     restart: unless-stopped
@@ -10,6 +10,7 @@ services:
     environment:
       MYTUNER_COLLECTION_RETENTION_DAYS: "${MYTUNER_COLLECTION_RETENTION_DAYS:-7}"
       MYTUNER_REPORT_RETENTION_DAYS: "${MYTUNER_REPORT_RETENTION_DAYS:-30}"
+      MYTUNER_PAUSE_BACKGROUND_DURING_PLAYBACK: "${MYTUNER_PAUSE_BACKGROUND_DURING_PLAYBACK:-true}"
       MYTUNER_ENCODER_CONCURRENCY: "${MYTUNER_ENCODER_CONCURRENCY:-3}"
       MYTUNER_SECURE_COOKIE: "${MYTUNER_SECURE_COOKIE:-false}"
       MYTUNER_PUBLIC_ORIGIN: "${MYTUNER_PUBLIC_ORIGIN:-}"

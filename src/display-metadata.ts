@@ -84,16 +84,198 @@ function targetItems(store: Store, target: MetadataTarget): Media[] {
       .all(target.sourceId) as unknown as Media[]
   ).filter((i) => showKey(i) === target.key);
 }
-function currentIntegration(store: Store, item: Media) {
-  const rows = store.db
-    .prepare(
-      "SELECT provider,external_id,metadata_json FROM integration_metadata WHERE media_id=? ORDER BY provider,external_id",
-    )
-    .all(item.id) as {
-    provider: string;
-    external_id: string;
-    metadata_json: string;
-  }[];
+interface ProjectionContext {
+  sources: Map<string, Source>;
+  imports: Map<
+    string,
+    { provider: string; external_id: string; metadata_json: string }[]
+  >;
+  settings: Map<string, Record<string, unknown>>;
+  refresh: Map<string, Record<string, unknown>>;
+  saved: Map<string, Saved>;
+}
+function projectionContext(store: Store, items?: readonly Media[]) {
+  const sourceIds = [...new Set(items?.map((item) => item.source_id))];
+  const ids = [...new Set(items?.map((item) => item.id))];
+  const targets = items
+    ? [
+        ...new Set(
+          items.flatMap((item) => [
+            `media:${item.id}`,
+            `show:${item.source_id}:${showKey(item)}`,
+          ]),
+        ),
+      ]
+    : [];
+  // JSON array parameters avoid variable-count limits for large selections. For
+  // detail pages, provider/manual metadata belonging to other sources is unread.
+  const scoped = (column: string, values: string[]) =>
+    items ? ` WHERE ${column} IN (SELECT value FROM json_each(?))` : "";
+  const read = (sql: string, values: string[]) =>
+    store.db.prepare(sql).all(...(items ? [JSON.stringify(values)] : []));
+  const context: ProjectionContext = {
+    sources: new Map(
+      (
+        read(
+          "SELECT * FROM sources" + scoped("id", sourceIds),
+          sourceIds,
+        ) as unknown as Source[]
+      ).map((row) => [row.id, row]),
+    ),
+    imports: new Map(),
+    settings: new Map(
+      read(
+        "SELECT source_id,provider,last_success FROM integrations" +
+          scoped("source_id", sourceIds),
+        sourceIds,
+      ).map((row) => [String(row.source_id), row]),
+    ),
+    refresh: new Map(
+      read(
+        "SELECT source_id,last_error FROM refresh_sources" +
+          scoped("source_id", sourceIds),
+        sourceIds,
+      ).map((row) => [String(row.source_id), row]),
+    ),
+    saved: new Map(
+      (
+        read(
+          "SELECT * FROM display_metadata" + scoped("target_key", targets),
+          targets,
+        ) as unknown as (Saved & { target_key: string })[]
+      ).map((row) => [row.target_key, row]),
+    ),
+  };
+  for (const row of read(
+    "SELECT media_id,provider,external_id,metadata_json FROM integration_metadata" +
+      scoped("media_id", ids) +
+      " ORDER BY provider,external_id",
+    ids,
+  )) {
+    const id = String(row.media_id),
+      rows = context.imports.get(id) ?? [];
+    rows.push(
+      row as unknown as {
+        provider: string;
+        external_id: string;
+        metadata_json: string;
+      },
+    );
+    context.imports.set(id, rows);
+  }
+  return context;
+}
+export function createMediaProjector(store: Store, items?: readonly Media[]) {
+  const context = projectionContext(store, items);
+  const projected = new Map<string, Media>();
+  return (item: Media) => {
+    let value = projected.get(item.id);
+    if (!value) {
+      value = displayMedia(store, item, context);
+      // Repeated guide/program references benefit from memoization; a whole
+      // catalog pass must not retain another full projected catalog in memory.
+      if (projected.size >= 256)
+        projected.delete(projected.keys().next().value!);
+      projected.set(item.id, value);
+    }
+    return value;
+  };
+}
+// The browse read model needs display/group fields, never another copy of the
+// provider description/technical JSON. Keep the same resolver and identity rules.
+export function createCompactMediaProjector(
+  store: Store,
+  items: readonly Media[],
+) {
+  const context = projectionContext(store, items);
+  return (item: Media) => {
+    const raw = JSON.parse(item.metadata_json);
+    const key = showKey(item);
+    const source = projectionSource(store, item.source_id, context);
+    const info = inspectMetadata(
+      store,
+      { kind: "media", mediaId: item.id },
+      [item],
+      context,
+    );
+    const series =
+      source.kind === "shows" ||
+      raw.seriesTitle !== undefined ||
+      raw.seriesId !== undefined
+        ? (inspectMetadata(
+            store,
+            { kind: "show", sourceId: item.source_id, key },
+            [item],
+            context,
+          ).effective.title.value ?? raw.seriesTitle)
+        : raw.seriesTitle;
+    const title = info.effective.title.value || item.title;
+    const fields = [
+      ...new Set(
+        [
+          title,
+          item.title,
+          item.relative_path,
+          series ?? "",
+          raw.seriesTitle ?? "",
+          raw.collection?.title ?? "",
+          source.name,
+        ]
+          .filter(Boolean)
+          .map((value: string) => value.toLocaleLowerCase()),
+      ),
+    ];
+    return {
+      id: item.id,
+      sourceId: item.source_id,
+      relativePath: item.relative_path,
+      storedTitle: item.title,
+      title,
+      available: item.available,
+      sourceKind: source.kind,
+      showKey: key,
+      season: raw.seasonNumber ?? 1,
+      seriesTitle: series,
+      collectionKey: raw.collection
+        ? String(raw.collection.tmdbId ?? raw.collection.title)
+        : null,
+      collectionTitle: raw.collection?.title,
+      artworkTypes: ((raw.images ?? []) as { coverType: string }[]).map(
+        (image) => image.coverType,
+      ),
+      fields,
+      mediaFields: [
+        title.toLowerCase(),
+        item.relative_path.toLowerCase(),
+        String(series ?? "").toLowerCase(),
+      ],
+    };
+  };
+}
+export type CompactMedia = ReturnType<
+  ReturnType<typeof createCompactMediaProjector>
+>;
+function projectionSource(
+  store: Store,
+  id: string,
+  context?: ProjectionContext,
+) {
+  return context?.sources.get(id) ?? sourceById(store, id);
+}
+function currentIntegration(
+  store: Store,
+  item: Media,
+  context?: ProjectionContext,
+) {
+  const rows = (
+    context
+      ? (context.imports.get(item.id) ?? [])
+      : store.db
+          .prepare(
+            "SELECT provider,external_id,metadata_json FROM integration_metadata WHERE media_id=? ORDER BY provider,external_id",
+          )
+          .all(item.id)
+  ) as { provider: string; external_id: string; metadata_json: string }[];
   const raw = JSON.parse(item.metadata_json),
     ref = raw.integrationReference;
   if (ref)
@@ -118,10 +300,15 @@ function currentIntegration(store: Store, item: Media) {
     ) ?? rows[0]
   );
 }
-function identity(store: Store, target: MetadataTarget, items: Media[]) {
+function identity(
+  store: Store,
+  target: MetadataTarget,
+  items: Media[],
+  context?: ProjectionContext,
+) {
   if (target.kind === "show") return metadataTargetKey(target);
   const item = items[0]!;
-  const imported = currentIntegration(store, item);
+  const imported = currentIntegration(store, item, context);
   return hash(
     imported
       ? [
@@ -154,13 +341,18 @@ function candidates(
   target: MetadataTarget,
   items: Media[],
   saved?: Saved,
+  context?: ProjectionContext,
 ) {
   const item = items[0]!,
     raw = JSON.parse(item.metadata_json);
-  const imported = currentIntegration(store, item);
-  const config = store.db
-    .prepare("SELECT provider,last_success FROM integrations WHERE source_id=?")
-    .get(item.source_id);
+  const imported = currentIntegration(store, item, context);
+  const config = context
+    ? context.settings.get(item.source_id)
+    : store.db
+        .prepare(
+          "SELECT provider,last_success FROM integrations WHERE source_id=?",
+        )
+        .get(item.source_id);
   const data = imported ? JSON.parse(String(imported.metadata_json)) : null;
   const episode = data?.episodes as
     { title?: string; overview?: string }[] | undefined;
@@ -188,9 +380,11 @@ function candidates(
               description: text(data.overview),
             }))
     : {};
-  const refresh = store.db
-    .prepare("SELECT last_error FROM refresh_sources WHERE source_id=?")
-    .get(item.source_id);
+  const refresh = context
+    ? context.refresh.get(item.source_id)
+    : store.db
+        .prepare("SELECT last_error FROM refresh_sources WHERE source_id=?")
+        .get(item.source_id);
   const integration: Candidate = {
     values,
     status: data
@@ -215,8 +409,8 @@ function candidates(
         }
       : { values: {}, status: "not-checked" };
   const location =
-    sourceById(store, item.source_id).metadata_root ??
-    sourceById(store, item.source_id).root_path;
+    projectionSource(store, item.source_id, context).metadata_root ??
+    projectionSource(store, item.source_id, context).root_path;
   if (local.location && local.location !== location)
     local.status = "stale-location";
   const fallback: Values = {
@@ -242,18 +436,21 @@ export function inspectMetadata(
   store: Store,
   target: MetadataTarget,
   knownItems?: Media[],
+  context?: ProjectionContext,
 ) {
   const items = knownItems ?? targetItems(store, target);
   invariant(items.length, 404, "Content not found");
   const key = metadataTargetKey(target),
-    currentIdentity = identity(store, target, items);
-  const row = store.db
-    .prepare("SELECT * FROM display_metadata WHERE target_key=?")
-    .get(key) as unknown as Saved | undefined;
+    currentIdentity = identity(store, target, items, context);
+  const row = (context
+    ? context.saved.get(key)
+    : store.db
+        .prepare("SELECT * FROM display_metadata WHERE target_key=?")
+        .get(key)) as unknown as Saved | undefined;
   const same = !row || row.identity === currentIdentity;
   const saved = same ? row : undefined;
   const choices: Choices = saved ? JSON.parse(saved.state_json) : defaults();
-  const c = candidates(store, target, items, saved);
+  const c = candidates(store, target, items, saved, context);
   const resolve = (field: "title" | "description") => {
     const choice = choices[field];
     if (choice.source === "manual")
@@ -284,26 +481,35 @@ export function inspectMetadata(
   };
   return {
     target,
-    revision: hash([
-      row?.revision ?? 0,
-      choices,
-      currentIdentity,
-      sourceById(store, items[0]!.source_id).metadata_root ?? null,
-      c,
-    ]),
+    revision: context
+      ? ""
+      : hash([
+          row?.revision ?? 0,
+          choices,
+          currentIdentity,
+          sourceById(store, items[0]!.source_id).metadata_root ?? null,
+          c,
+        ]),
     choices,
     candidates: c,
     effective: { title: resolve("title"), description: resolve("description") },
     requiresReview: !same,
   };
 }
-export function displayMedia(store: Store, item: Media): Media {
-  const info = inspectMetadata(store, { kind: "media", mediaId: item.id }, [
-    item,
-  ]);
+export function displayMedia(
+  store: Store,
+  item: Media,
+  context?: ProjectionContext,
+): Media {
+  const info = inspectMetadata(
+    store,
+    { kind: "media", mediaId: item.id },
+    [item],
+    context,
+  );
   const raw = JSON.parse(item.metadata_json);
   if (
-    sourceById(store, item.source_id).kind === "shows" ||
+    projectionSource(store, item.source_id, context).kind === "shows" ||
     raw.seriesTitle !== undefined ||
     raw.seriesId !== undefined
   ) {
@@ -311,6 +517,7 @@ export function displayMedia(store: Store, item: Media): Media {
       store,
       { kind: "show", sourceId: item.source_id, key: showKey(item) },
       [item],
+      context,
     );
     raw.seriesTitle = show.effective.title.value ?? raw.seriesTitle;
     raw.seriesOverview = show.effective.description.value;
