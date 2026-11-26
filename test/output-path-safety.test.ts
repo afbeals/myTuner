@@ -25,7 +25,6 @@ import {
 } from "../src/generation.js";
 import { reconcileAssets } from "../src/asset-reconciliation.js";
 import { EncoderAdmission } from "../src/encoder-admission.js";
-import { setImmediate } from "node:timers/promises";
 import type { Media } from "../src/domain.js";
 
 async function snapshot(root: string): Promise<unknown[]> {
@@ -194,6 +193,16 @@ test("a parent replaced while waiting for encoder admission is rejected before e
   const entered = new Promise<void>((resolve) => {
     began = resolve;
   });
+  let queued!: () => void;
+  const waitingForAdmission = new Promise<void>((resolve) => {
+    queued = resolve;
+  });
+  const run = encoders.run.bind(encoders);
+  encoders.run = (priority, signal, authorize, execute, onWaiting) =>
+    run(priority, signal, authorize, execute, (waiting) => {
+      onWaiting?.(waiting);
+      if (waiting) queued();
+    });
   const occupying = encoders.run(
     "background",
     new AbortController().signal,
@@ -217,8 +226,12 @@ test("a parent replaced while waiting for encoder admission is rejected before e
   const job = await runner.enqueue(f.request("")),
     task = runner.drain();
   try {
-    for (let n = 0; n < 100 && !encoders.snapshot().waitingBackground; n++)
-      await setImmediate();
+    await Promise.race([
+      waitingForAdmission,
+      task.then(() =>
+        assert.fail("Generation finished before encoder admission"),
+      ),
+    ]);
     assert.equal(encoders.snapshot().waitingBackground, 1);
     await rename(join(f.generated, f.a.id), join(f.root, "before-admission"));
     await symlink(join(f.originals, "B"), join(f.generated, f.a.id));
