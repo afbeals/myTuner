@@ -28,7 +28,7 @@ interface Action {
 const owned =
   /^[a-f0-9-]{36}\/[a-f0-9]{64}\/(thumbnail\.jpg|gif\.gif|conversion\.mp4)$/;
 const partial =
-  /^[a-f0-9-]{36}\/[a-f0-9]{64}\/\.partial-[a-f0-9-]{36}\.(jpg|gif|mp4)$/;
+  /^(?:[a-f0-9-]{36}\/[a-f0-9]{64}\/)?\.partial-[a-f0-9-]{36}\.(jpg|gif|mp4)$/;
 function identity(row: Row) {
   return JSON.stringify([
     row.asset_id,
@@ -68,9 +68,9 @@ export async function reconcileAssets(
     for await (const entry of directory) {
       check();
       invariant(
-        ++count <= 10000,
+        ++count <= 100000,
         422,
-        "Output reconciliation exceeds 10,000 entries; operator review required",
+        "Output reconciliation exceeds 100,000 entries; operator review required",
       );
       const rel = relative ? `${relative}/${entry.name}` : entry.name,
         info = await lstat(join(root, rel));
@@ -91,13 +91,13 @@ export async function reconcileAssets(
   check();
   const rows = store.db
     .prepare(
-      "SELECT m.*,a.id AS asset_id,a.kind,a.relative_path AS asset_path,a.fingerprint AS asset_fingerprint FROM generated_assets a JOIN media m ON m.id=a.media_id ORDER BY a.id LIMIT 10001",
+      "SELECT m.*,a.id AS asset_id,a.kind,a.relative_path AS asset_path,a.fingerprint AS asset_fingerprint FROM generated_assets a JOIN media m ON m.id=a.media_id ORDER BY a.id LIMIT 50001",
     )
     .all() as unknown as Row[];
   invariant(
-    rows.length <= 10000,
+    rows.length <= 50000,
     422,
-    "Output reference reconciliation exceeds 10,000 rows",
+    "Output reference reconciliation exceeds 50,000 rows",
   );
   const actions: Action[] = [],
     referenced = new Set(rows.map((row) => row.asset_path));

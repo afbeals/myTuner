@@ -160,6 +160,73 @@ INSERT INTO refresh_attempts(source_id,last_attempt_ms,last_completed_ms,last_su
 SELECT s.id,COALESCE(i.last_success,0),COALESCE(i.last_success,0),i.last_success,r.last_error
 FROM sources s LEFT JOIN refresh_sources r ON r.source_id=s.id LEFT JOIN integrations i ON i.source_id=s.id
 WHERE i.last_success IS NOT NULL OR r.last_error IS NOT NULL;`,
+  `CREATE INDEX integration_metadata_media ON integration_metadata(media_id);`,
+  `CREATE INDEX schedule_by_revision_end ON schedule_entries(revision_id,end_ms);
+CREATE INDEX media_available_title ON media(available,title,id);
+CREATE INDEX playback_events_channel_account ON playback_events(channel_id,account_id);
+CREATE TABLE provider_suggestions(connection_key TEXT PRIMARY KEY,provider TEXT NOT NULL,url TEXT NOT NULL,roots_json TEXT NOT NULL DEFAULT '[]',observed_ms INTEGER,last_attempt_ms INTEGER NOT NULL,last_error TEXT);
+CREATE TABLE catalog_revision(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL);
+INSERT INTO catalog_revision VALUES(1,0);
+${[
+  "media",
+  "sources",
+  "source_grants",
+  "collections",
+  "collection_items",
+  "display_metadata",
+  "integration_metadata",
+  "integrations",
+  "refresh_sources",
+]
+  .flatMap((table) =>
+    ["INSERT", "UPDATE", "DELETE"].map(
+      (operation) =>
+        `CREATE TRIGGER catalog_${table}_${operation.toLowerCase()} AFTER ${operation} ON ${table} BEGIN UPDATE catalog_revision SET revision=revision+1 WHERE id=1; END;`,
+    ),
+  )
+  .join("\n")}`,
+
+  `CREATE TABLE catalog_projection_state (
+ id INTEGER PRIMARY KEY CHECK(id=1), format INTEGER NOT NULL, generation INTEGER NOT NULL,
+ revision INTEGER NOT NULL, backfill_cursor TEXT NOT NULL DEFAULT '', backfill_complete INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO catalog_projection_state(id,format,generation,revision) VALUES(1,1,1,-1);
+CREATE TABLE catalog_projection_rows (
+ generation INTEGER NOT NULL, media_id TEXT NOT NULL, source_id TEXT NOT NULL,
+ relative_path TEXT NOT NULL, sort_title TEXT NOT NULL, available INTEGER NOT NULL,
+ show_key TEXT NOT NULL, data_json TEXT NOT NULL, byte_length INTEGER NOT NULL,
+ PRIMARY KEY(generation,media_id)
+);
+CREATE INDEX catalog_projection_order ON catalog_projection_rows(generation,available,sort_title,media_id);
+CREATE INDEX catalog_projection_source ON catalog_projection_rows(generation,source_id,show_key,media_id);
+CREATE TABLE catalog_projection_members (
+ generation INTEGER NOT NULL, media_id TEXT NOT NULL, kind TEXT NOT NULL, group_key TEXT NOT NULL,
+ PRIMARY KEY(generation,media_id,kind,group_key)
+);
+CREATE INDEX catalog_projection_group ON catalog_projection_members(generation,kind,group_key,media_id);
+CREATE TABLE catalog_projection_dirty_media(media_id TEXT PRIMARY KEY);
+CREATE TABLE catalog_projection_dirty_sources(source_id TEXT PRIMARY KEY,cursor TEXT NOT NULL DEFAULT '');
+CREATE TABLE catalog_projection_dirty_shows(source_id TEXT NOT NULL,show_key TEXT NOT NULL,cursor TEXT NOT NULL DEFAULT '',PRIMARY KEY(source_id,show_key));
+CREATE INDEX media_source_identity ON media(source_id,id);
+${["INSERT", "UPDATE", "DELETE"]
+  .map((operation) => {
+    const row = operation === "DELETE" ? "OLD" : "NEW";
+    return `CREATE TRIGGER projection_media_${operation.toLowerCase()} AFTER ${operation} ON media BEGIN
+ INSERT INTO catalog_projection_dirty_media VALUES(${row}.id) ON CONFLICT(media_id) DO NOTHING;
+ END;
+ CREATE TRIGGER projection_source_${operation.toLowerCase()} AFTER ${operation} ON sources BEGIN
+ INSERT INTO catalog_projection_dirty_sources(source_id) VALUES(${row}.id) ON CONFLICT(source_id) DO UPDATE SET cursor='';
+ END;
+ CREATE TRIGGER projection_import_${operation.toLowerCase()} AFTER ${operation} ON integration_metadata BEGIN
+ INSERT INTO catalog_projection_dirty_media VALUES(${row}.media_id) ON CONFLICT(media_id) DO NOTHING;
+ ${operation === "UPDATE" ? "INSERT INTO catalog_projection_dirty_media VALUES(OLD.media_id) ON CONFLICT(media_id) DO NOTHING;" : ""}
+ END;
+ CREATE TRIGGER projection_display_${operation.toLowerCase()} AFTER ${operation} ON display_metadata BEGIN
+ INSERT INTO catalog_projection_dirty_media SELECT substr(${row}.target_key,7) WHERE substr(${row}.target_key,1,6)='media:' ON CONFLICT(media_id) DO NOTHING;
+ INSERT INTO catalog_projection_dirty_shows(source_id,show_key) SELECT ${row}.source_id,substr(${row}.target_key,length(${row}.source_id)+7) WHERE substr(${row}.target_key,1,5)='show:' ON CONFLICT(source_id,show_key) DO UPDATE SET cursor='';
+ END;`;
+  })
+  .join("\n")}`,
 ];
 
 export const schemaVersion = migrations.length;

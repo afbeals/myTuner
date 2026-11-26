@@ -15,6 +15,7 @@ const port = Number(process.env.MYTUNER_E2E_PORT ?? (demo ? 8788 : 8787));
 const longEpisodes = process.env.MYTUNER_E2E_LONG_EPISODES === "1";
 const root = await mkdtemp(join(tmpdir(), "mytuner-ui-"));
 await mkdir(join(root, "media"));
+await mkdir(join(root, "spare"));
 await mkdir(join(root, "data"));
 await mkdir(join(root, "commercials"));
 const execute = promisify(execFile);

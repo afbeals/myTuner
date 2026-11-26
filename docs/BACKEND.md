@@ -4,7 +4,7 @@ For component/data flow, read [architecture](ARCHITECTURE.md). Detailed [discove
 
 ## Current scope
 
-The Node 24 service implements accounts, browser sessions, TV pairing/PINs, source grants, read-only scanning/metadata import, dynamic library selectors, collections, recurring channel programming, commercials, subscription guides, independent playback clocks, direct files, on-demand HLS, text subtitles, generation jobs, and backup/restore/verification, retained recent-airing lookup, deleted-collection recovery and explicit problem reports. Version 0.2.0 also serves the implemented React manager/player at `/`; the Kotlin/Media3 TV client uses these APIs. See [CLIENTS.md](CLIENTS.md).
+The Node 24 service implements accounts, browser sessions, TV pairing/PINs, source grants, read-only scanning/metadata import, dynamic library selectors, collections, recurring channel programming, commercials, subscription guides, independent playback clocks, direct files, on-demand HLS, text subtitles, generation jobs, and backup/restore/verification, retained recent-airing lookup, deleted-collection recovery and explicit problem reports. Version 0.2.2 also serves the implemented React manager/player at `/`; the Kotlin/Media3 TV client uses these APIs. See [CLIENTS.md](CLIENTS.md).
 
 Real FFmpeg fixtures validate server outputs. Household readiness still requires representative browser/Media3 playback acceptance, visual/accessibility testing, actual upstream services, Docker/Unraid and physical TV validation. Source media never moves or changes.
 
@@ -89,7 +89,7 @@ Integration shape: `{provider:"sonarr"|"radarr",url,apiKey,mappings:[{from,to}]}
 
 Persistent keys use AES-256-GCM; a private 32-byte integration.key stays in app data and application backups. A missing key for existing connections stops startup rather than silently replacing it. Refreshes are deduplicated per source, limited to two concurrent source jobs, and retried after failure while retaining prior imported metadata. The main server checks due jobs every 30 seconds. Artwork URLs/keys remain server-side: the proxy accepts only configured-host MediaCover paths, limits MIME/size/time, rejects redirects, and reauthorizes delivery.
 
-Library `search` is trimmed, limited to 200 characters and matched case-insensitively against authorized titles, relative file paths, series/collection titles and source names. Parent group results retain full authorized membership/counts. Saved user collections remain a separate list. Superseded saved-integration refresh results cannot overwrite newly configured metadata or health; a scan requested for new settings waits and then performs fresh work.
+Library `search` is trimmed, limited to 200 characters and matched case-insensitively against authorized titles, relative file paths, series/collection titles and source names. Parent group results retain full authorized membership/counts. Legacy aggregate callers retrieve saved user collections separately; the paged browser response includes page-scoped saved collections. Superseded saved-integration refresh results cannot overwrite newly configured metadata or health; a scan requested for new settings waits and then performs fresh work.
 
 Selections:
 
@@ -295,3 +295,40 @@ Full generated-output reconciliation uses `POST /api/admin/assets/cleanup` with 
 `GET /api/admin/status` source entries include `refreshScheduled`, `lastAttemptMs`, `lastRefreshMs`, `refreshError`, `lastImportMs`, and `nextRefreshMs`. `lastRefreshMs` is the most recent successful source check; `lastImportMs` refers specifically to metadata import. `refreshState` is `never`, `incomplete`, `failed`, `overdue`, or `ok`. Null `nextRefreshMs` means no automatic schedule; it does not imply success. Error messages are sanitized and administrator-only. The status cache can delay a changed result by up to15seconds. Persisted diagnostics survive restart and unscheduling.
 
 Source registration re-authenticates the current session/role after asynchronous path validation, immediately before insertion. Explicit provider import likewise re-authenticates after fetching upstream metadata, before catalog writes. A demoted/disabled/revoked requester receives403/401 rather than completing an admin write. Profile lineup saves validate the viewing PIN unlock before checking membership/version conflicts: a locked profile returns403; an actually stale lineup still returns409 without disclosing hidden private channel IDs.
+
+## Source management and bounded library responses — 0.2.2
+
+`PATCH /api/sources/:sourceId` accepts optional `name`, `root`, `kind`, and `recursive`, with the same kinds as source creation. Only admins may mutate sources. Filesystem validation yields, then current authority, source identity and work exclusion are rechecked. Responses include `catalogReset`. Name/scope edits preserve IDs. A directory/type change resets that source’s catalog, integrations, grants and local-file settings so replacement content cannot inherit stale authority. Active scans or queued/running generation return 409. Destructive changes also reject channel configuration, retained schedule, collection and playback-report references.
+
+`DELETE /api/sources/:sourceId` removes an unused source and its application-owned database references after those same guards. It does not delete or modify source files. Existing derivative files may become orphans; normal generated-output reconciliation can review them. No force-delete option is provided. Retained references can intentionally block deletion until normal retention/dependency cleanup releases them.
+
+`GET /api/sources/:sourceId/integration` returns `hasApiKey: true` for a configured integration, never the stored key or ciphertext. `PUT` may omit `apiKey` to retain the encrypted key only when provider and normalized application URL still match. A first connection, changed provider or changed URL requires an explicit key; no saved credential is forwarded to a new destination implicitly.
+
+`GET /api/profiles/:profileId/library` additionally accepts `limit` (1–100), `offset`, `kind` (`all`, `shows`, `movies`, `videos`, `collections`) and optional `sourceId`. Supplying `limit` returns page-scoped category arrays, page-scoped `savedCollections`, authorized `sources`, and `pagination: {offset,limit,total}`. The 24-entry browser page shares its filters with the server. Counts exclude unauthorized content. Existing callers omitting `limit` retain the aggregate contract. Search still matches filenames and preserves full authorized parent-group membership. Custom folder results include ancestors, allowing two channels to select separate nested categories in one source.
+
+Sources displays per-source scan pending/success/incomplete/error messages alongside the detailed last result. A partial scan is not shown as full success, and provider matched/unmatched counts remain distinct from file scan completeness.
+
+`GET /api/sources/:sourceId/directories` is admin-only and supports `search` (up to 300 characters), `offset` (0–1,000,000), and `limit` (1–100, default 50). It returns `{items,hasMore,offset,limit}` with distinct relative parent paths from available catalog entries. It performs no filesystem traversal, metadata projection or media probing. Empty/unscanned folders require a normal source scan or manual path entry. A delayed ad-hoc `/import` response rechecks source existence/settings before applying metadata, preventing a removed/reset source from receiving stale results.
+
+## Performance/setup APIs and operator diagnostics
+
+All setup/background routes require a current administrator and normal cookie CSRF for mutations. GET choices read cached process/SQLite state; they do not enumerate media directories or contact providers.
+
+| Route                                                 | Contract                                                                                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| GET `/api/admin/background`                           | Memory queue snapshot, pause state and policy; no media reads                                                            |
+| GET `/api/admin/setup/path-suggestions?purpose=source | metadata                                                                                                                 | subtitles&sourceId=...` | Cached process-visible mount candidates and saved paths, with platform/provenance/unknown state |
+| GET `/api/admin/setup/provider-connections`           | At most 100 saved source/provider/URL references; no credential/ciphertext                                               |
+| GET `/api/sources/:sourceId/provider-suggestions`     | Cached observed roots, revisions and stale/error state                                                                   |
+| POST same + `/refresh`                                | Explicit lightweight provider inventory; strict provider/URL, optional key/reuseSourceId and configRevision              |
+| POST same + `/mapping-preview`                        | Draft mappings plus source/config/inventory revisions, optional at most 20 example paths; catalog/inventory-only preview |
+
+Integration PUT additionally accepts explicit `reuseSourceId` for a saved connection with identical provider/normalized full URL. Typed keys take precedence. Referenced configuration, source identity and admin authority are rechecked across asynchronous work. Metadata remains read-only upstream. Shared caching never sends retained credentials to a different destination.
+
+Raw media responses preserve page/limit/search and now avoid projecting every row on empty search. Grouped library remains page-scoped; its cold grouping/index build is bounded but still synchronous. Compact cache/input admission and memory caveats are documented in [the performance plan](PERFORMANCE_PLAN.md). `node dist/diagnose.js` supplies the read-only storage/health diagnostic; [Unraid checks](UNRAID_CHECKS.md) defines its limitations.
+
+## Explicit setup directory check and catalog reader
+
+`POST /api/admin/setup/check-directory` accepts `{ path, purpose, recursive, sourceId? }`, where purpose is `source`, `metadata` or `subtitles`. It requires current admin/CSRF authority; source-specific metadata/subtitle checks require a source ID. Returns a structured existence/readability/canonical-path/extension-sample result with `complete`, `reason` and bounded-check information. Invalid paths and incomplete sampling do not imply a playable library. Only explicit button use invokes this bounded read-only operation; a busy underlying check returns 429.
+
+Paged `/api/profiles/:profileId/library`, `/media` and `/library/options` requests use the bounded production catalog reader. Existing paged response shapes and substring/grouping semantics remain. Omitting a production HTTP library limit defaults to 24 entries; use offset/limit to traverse the catalog. Queue pressure, continued catalog change, worker failure or indexing limits return retryable 503 errors; authority failures retain existing authentication/hidden-resource responses. Client disconnects cancel their waiter and final response publication rechecks current identity/profile/catalog state. See [large-library behavior](LARGE_LIBRARY.md).

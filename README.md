@@ -2,9 +2,11 @@
 
 A standalone personal TV network over existing read-only Unraid media. Manage programming in a browser and watch continuously scheduled channels on a browser/TV player. No Plex or ErsatzTV dependency.
 
-**Current server/browser version: 0.2.1 POC; native TV client: 0.2.0.** The approved browser manager/player and native Android/Fire OS TV client are implemented. The server serves the browser at its root URL; a locally built, debug-signed TV APK is available under `android/app/build/outputs/apk/debug/app-debug.apk`. Browser/native verification is recorded in the checklist; actual Bravia/Fire OS and Unraid acceptance remain open. No store listing or published release is implied.
+**Current server/browser version: 0.2.2 POC; native TV client: 0.2.0.** The approved browser manager/player and native Android/Fire OS TV client are implemented. The server serves the browser at its root URL; a locally built, debug-signed TV APK is available under `android/app/build/outputs/apk/debug/app-debug.apk`. Browser/native verification is recorded in the checklist; actual Bravia/Fire OS and Unraid acceptance remain open. No store listing or published release is implied.
 
 All six formerly deferred findings and backend/browser verification are complete. Native checks have partial passing evidence; remaining emulator verification was deferred at the owner’s request. [Verification](docs/VERIFICATION.md) records results, and [differed](docs/differed.md) records remaining emulator, device/model/OS, Windows Docker, Unraid, representative-media and human acceptance.
+
+For the owner’s normal installation route, use [Unraid Docker-tab setup](docs/UNRAID_DOCKER_TAB.md). Source edits/removal, saved-key indicators, scan feedback, compact profile grants, scanned-subfolder pickers and paged library requests are included in 0.2.2. A persisted compact catalog and bounded read-only worker support large-library browsing; explicit directory checks and cached setup selectors reduce path mistakes without automatic share traversal. See [large-library behavior](docs/LARGE_LIBRARY.md) and [performance evidence](docs/PERFORMANCE_PLAN.md). CI retains the browser tests with isolated shards and reusable build/browser caches.
 
 See [Windows Docker acceptance](docs/WINDOWS_DOCKER.md), [Unraid/TV pilot gates](docs/PILOT_ACCEPTANCE.md) and [the 58-frame implementation inventory](docs/DESIGN_COVERAGE.md) for the current delivery work.
 

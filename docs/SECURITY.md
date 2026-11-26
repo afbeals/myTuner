@@ -104,3 +104,9 @@ Report preparation reads the caller's account/auth-session-bound playback refere
 Other accounts cannot enumerate own-report titles/references/counts; reporting-account reads recheck current access before counts/paging. Admin is the global-inbox exception. Paired devices receive only the specific new recent GET and report-send POST capabilities (plus playback report-preview). Device sessions, including those paired by admins, remain unable to list report inboxes, restore collections, manage programming or use admin mutations. These additions do not grant companion control or cross-session playback access.
 
 Reports and soft-deleted references are sensitive application metadata included in DB backups. Configurable default report age30 days and collection grace7 days do not expire older operator-managed backup bundles. No background analytics/offline uploader is introduced.
+
+## Source lifecycle and retained integration keys
+
+Source edits/removal are admin-only. Root validation rechecks the initiating actor after filesystem awaits. Destructive edits reject active work and retained content references; a permitted root/type change clears catalog IDs, saved connections and grants rather than granting access to replacement files. Source originals and sidecars are untouched. Removal never deletes a media directory.
+
+Saved API keys are represented by a boolean and a placeholder, not round-tripped into a password input. Omitting a key is accepted only for the existing provider/application URL. A new destination requires an explicit key. Library caches remain actor/profile scoped, recheck viewing/PIN authority and invalidate on database changes; private counts and pages are tested after grant revocation.

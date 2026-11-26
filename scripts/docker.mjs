@@ -20,6 +20,8 @@ export async function main(action, options = {}) {
     run = createRunner({ cwd: root }),
     signal,
     baseRef,
+    cacheFrom = process.env.MYTUNER_BUILD_CACHE_FROM,
+    cacheTo = process.env.MYTUNER_BUILD_CACHE_TO,
     accept = acceptance,
     showPreview = preview,
     log = console.log,
@@ -44,6 +46,7 @@ Usage: npm run docker -- <command>
 Image: ${repository}:${displayVersion}
 Requirements: Node >=24.13.0 <25; Docker Linux engine; Buildx; Compose for test/release.
 Docker authentication is required for push/release. Preview port: MYTUNER_PREVIEW_PORT.
+Optional Buildx caches: MYTUNER_BUILD_CACHE_FROM and MYTUNER_BUILD_CACHE_TO.
 Example: npm run docker:release
 Help: npm run docker:help`);
     return;
@@ -74,6 +77,8 @@ Help: npm run docker:help`);
     showPreview,
     log,
     previewPort,
+    cacheFrom,
+    cacheTo,
   };
   if (action === "release") {
     for (const step of ["build", "test", "tag", "push"]) {
@@ -110,6 +115,8 @@ Help: npm run docker:help`);
         `tv.mytuner.source-digest=${digest}`,
         "--build-arg",
         `APP_VERSION=${version}`,
+        ...(cacheFrom ? ["--cache-from", cacheFrom] : []),
+        ...(cacheTo ? ["--cache-to", cacheTo] : []),
         "-t",
         tag,
         ".",

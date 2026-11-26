@@ -1,5 +1,10 @@
+import { CatalogService } from "./catalog-service.js";
+import { readCatalogRequest } from "./catalog-request.js";
+import { Maintenance } from "./maintenance.js";
+import { BackgroundWork } from "./background-work.js";
 import { applicationVersion } from "./version.js";
 import { reconcileAssets } from "./asset-reconciliation.js";
+import { registerSetupRoutes } from "./setup-routes.js";
 import { registerSubtitleRoutes } from "./subtitle-routes.js";
 import { registerMetadataRoutes } from "./metadata-routes.js";
 import { displayMedia } from "./display-metadata.js";
@@ -20,6 +25,8 @@ import type { Store } from "./database.js";
 import type { Account, Channel, Media } from "./domain.js";
 import { DomainError, invariant } from "./domain.js";
 import { addSource, safeMediaPath } from "./catalog.js";
+import { sourceDirectories } from "./source-directories.js";
+import { editSource, removeSource } from "./source-management.js";
 import {
   createAccount,
   login,
@@ -123,6 +130,8 @@ export function createServer(
     integrationKey?: Buffer;
     cacheRoot?: string;
     autoMaintenance?: boolean;
+    pauseBackgroundDuringPlayback?: boolean;
+    backgroundWork?: BackgroundWork;
     webRoot?: string;
     encoderConcurrency?: number;
     collectionRetentionDays?: number;
@@ -160,18 +169,36 @@ export function createServer(
     ),
   );
   const encoders = new EncoderAdmission(options.encoderConcurrency ?? 3);
+  const background = options.backgroundWork ?? new BackgroundWork();
+  const catalog = new CatalogService(store);
+  let maintenanceLanes: Maintenance | undefined;
+  let backgroundPolicyTimer: ReturnType<typeof setInterval> | undefined;
+  app.addHook("preClose", async () => {
+    // Set every stop flag before rejecting queued work. Otherwise a queued
+    // generation task could record a terminal failure instead of restart work.
+    maintenanceLanes?.requestStop();
+    clearInterval(backgroundPolicyTimer);
+    const catalogStopping = catalog.stop();
+    const generationStopping = generation.stop();
+    const refreshStopping = refresh.stop();
+    background.stop();
+    encoders.stop();
+    await Promise.allSettled([
+      catalogStopping,
+      generationStopping,
+      refreshStopping,
+      maintenanceLanes?.stop(),
+    ]);
+  });
   const generation = new GenerationRunner(
     store,
     generatedRoot,
     undefined,
     undefined,
     encoders,
+    background,
   );
-  app.addHook("preClose", async () => {
-    const stopping = generation.stop();
-    encoders.stop();
-    await stopping;
-  });
+
   app.addHook("onClose", async () => {
     await generation.stop();
   });
@@ -182,7 +209,12 @@ export function createServer(
         app.log.error({ err: error }, "Generation worker failed"),
       );
   });
-  const refresh = new RefreshService(store, options.integrationKey);
+  const refresh = new RefreshService(
+    store,
+    options.integrationKey,
+    undefined,
+    background,
+  );
   app.addHook("onClose", async () => refresh.stop());
   const actor = registerIdentity(
     app,
@@ -190,6 +222,11 @@ export function createServer(
     options.secureCookie,
     options.publicOrigin,
   );
+  registerSetupRoutes(app, store, actor, refresh, [
+    ...roots,
+    generatedRoot,
+    cacheRoot,
+  ]);
   const access = new AccessRegistry();
   const accessTimer = setInterval(() => access.recheck(), 1000);
   accessTimer.unref();
@@ -464,6 +501,47 @@ export function createServer(
     requireAdmin(actor(request));
     return store.db.prepare("SELECT * FROM sources ORDER BY name").all();
   });
+  app.get("/api/sources/:sourceId/directories", async (request) => {
+    const account = actor(request);
+    requireAdmin(account);
+    const { sourceId } = z.object({ sourceId: id }).parse(request.params);
+    const input = z
+      .object({
+        search: z.string().max(300).default(""),
+        offset: z.coerce.number().int().min(0).max(1000000).default(0),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .strict()
+      .parse(request.query);
+    return sourceDirectories(store, account, sourceId, input);
+  });
+  app.patch("/api/sources/:sourceId", async (request) => {
+    requireAdmin(actor(request));
+    const { sourceId } = z.object({ sourceId: id }).parse(request.params);
+    const body = z
+      .object({
+        name: name.optional(),
+        root: z.string().min(1).optional(),
+        kind: z.enum(["shows", "movies", "videos", "commercials"]).optional(),
+        recursive: z.boolean().optional(),
+      })
+      .strict()
+      .parse(request.body);
+    return editSource(
+      store,
+      sourceId,
+      body,
+      [...roots, generatedRoot],
+      () => requireAdmin(actor(request)),
+      () => refresh.isScanning(sourceId),
+    );
+  });
+  app.delete("/api/sources/:sourceId", async (request, reply) => {
+    requireAdmin(actor(request));
+    const { sourceId } = z.object({ sourceId: id }).parse(request.params);
+    removeSource(store, sourceId, () => refresh.isScanning(sourceId));
+    return reply.code(204).send();
+  });
   app.post("/api/sources/:sourceId/scan", async (request) => {
     requireAdmin(actor(request));
     const { sourceId } = z.object({ sourceId: id }).parse(request.params);
@@ -496,6 +574,11 @@ export function createServer(
     );
     const items = await readIntegration(body.provider, body.url, body.apiKey);
     requireAdmin(actor(request));
+    invariant(
+      JSON.stringify(sourceById(store, sourceId)) === JSON.stringify(source),
+      409,
+      "Source settings changed during metadata import; review the source and retry",
+    );
     return importMetadata(store, source, items, body.mappings);
   });
   app.get("/api/sources/:sourceId/integration", async (request) => {
@@ -510,6 +593,7 @@ export function createServer(
     return row
       ? {
           provider: row.provider,
+          hasApiKey: true,
           url: row.url,
           mappings: JSON.parse(String(row.mappings_json)),
         }
@@ -522,7 +606,8 @@ export function createServer(
       .object({
         provider: z.enum(["sonarr", "radarr"]),
         url: z.url(),
-        apiKey: z.string().min(1).max(512),
+        apiKey: z.string().min(1).max(512).optional(),
+        reuseSourceId: id.optional(),
         mappings: z
           .array(
             z
@@ -583,7 +668,7 @@ export function createServer(
       .code(201)
       .send({ profileId, sourceId: body.sourceId, subtree });
   });
-  app.get("/api/profiles/:profileId/media", async (request) => {
+  app.get("/api/profiles/:profileId/media", async (request, reply) => {
     const account = actor(request),
       { profileId } = z.object({ profileId: id }).parse(request.params);
     requireProfile(store, account, profileId);
@@ -594,26 +679,15 @@ export function createServer(
         limit: z.coerce.number().int().min(1).max(200).default(50),
       })
       .parse(request.query);
-    const media = (
-      store.db
-        .prepare("SELECT * FROM media WHERE available=1 ORDER BY title,id")
-        .all() as unknown as Media[]
-    )
-      .filter((m) => canReadMedia(store, account, profileId, m))
-      .map((m) => displayMedia(store, m))
-      .filter((m) =>
-        [
-          m.title,
-          m.relative_path,
-          JSON.parse(m.metadata_json).seriesTitle ?? "",
-        ].some((v) => v.toLowerCase().includes(query.search.toLowerCase())),
-      );
-    return {
-      total: media.length,
-      items: media
-        .slice((query.page - 1) * query.limit, query.page * query.limit)
-        .map(({ mtime_ms, size, ...item }) => item),
-    };
+    return readCatalogRequest(
+      store,
+      request,
+      reply,
+      actor,
+      profileId,
+      (signal) => catalog.mediaPage(account, profileId, query, { signal }),
+      (result, current) => catalog.assertCurrent(result, current, profileId),
+    );
   });
   app.get("/api/profiles/:profileId/media/:mediaId", async (request) => {
     const account = actor(request),
@@ -637,7 +711,14 @@ export function createServer(
       store,
       retentionDays(options.reportRetentionDays, 30),
     );
-  registerFoundationRoutes(app, store, actor, programming, collectionRetention);
+  registerFoundationRoutes(
+    app,
+    store,
+    actor,
+    programming,
+    collectionRetention,
+    catalog,
+  );
   registerRetainedRoutes(app, store, actor, reports, collections);
   registerMetadataRoutes(app, store, actor, [
     ...roots,
@@ -818,49 +899,89 @@ export function createServer(
       return reply.type("video/mp2t").send(bytes);
     },
   );
-  if (options.autoMaintenance) {
-    let task: Promise<void> | undefined,
-      stopping = false;
-    const maintain = () => {
-      if (stopping) return Promise.resolve();
-      if (task) return task;
-      task = (async () => {
-        playback.collect();
-        collections.purge();
-        reports.purge();
-        await streaming.cleanup();
-        await refresh.tick();
-        if (stopping) return;
-        for (const row of store.db
-          .prepare(
-            "SELECT a.channel_id FROM active_schedules a JOIN channels c ON c.id=a.channel_id WHERE c.archived=0",
-          )
-          .all())
-          try {
-            programming.ensure(String(row.channel_id));
-          } catch {
-            app.log.warn(
-              "Schedule extension deferred; programming unavailable",
-            );
-          }
-      })().finally(() => {
-        task = undefined;
-      });
-      return task;
-    };
-    const timer = setInterval(
-      () => void maintain().catch(() => app.log.error("Maintenance failed")),
-      30000,
+  const pauseDuringPlayback = options.pauseBackgroundDuringPlayback ?? true;
+  const refreshBackgroundPolicy = () => {
+    if (!pauseDuringPlayback) {
+      background.setPaused(false);
+      return;
+    }
+    const now = Date.now();
+    const candidates = store.db
+      .prepare(
+        `SELECT p.id,p.anchor_ms FROM playback_sessions p
+      JOIN accounts a ON a.id=p.account_id AND a.disabled=0
+      JOIN channels c ON c.id=p.channel_id AND c.archived=0
+      WHERE p.paused=0 AND p.last_seen>? AND
+      (p.auth_session_hash IS NULL OR EXISTS(SELECT 1 FROM sessions s
+        WHERE s.token_hash=p.auth_session_hash AND s.expires_at>?))
+      AND EXISTS(SELECT 1 FROM schedule_entries e JOIN media m ON m.id=e.media_id
+        WHERE e.revision_id=p.revision_id AND m.available=1
+        AND e.source_size=m.size AND e.source_mtime_ms=m.mtime_ms
+        AND e.start_ms<=p.position_ms+MAX(0,?-p.anchor_ms)
+        AND e.end_ms>p.position_ms+MAX(0,?-p.anchor_ms))`,
+      )
+      .all(now - 90000, now, now, now);
+    // Polling an unavailable/stuck player is not evidence of disk-sensitive
+    // viewing. Allow startup/resume briefly, then require actual progress.
+    const active = candidates.some(
+      (row) =>
+        (now >= Number(row.anchor_ms) &&
+          now - Number(row.anchor_ms) <= 15000) ||
+        playback.isDelivering(String(row.id), now, 15000),
     );
-    timer.unref();
+    background.setPaused(Boolean(active));
+  };
+  app.get("/api/admin/background", async (request) => {
+    requireAdmin(actor(request));
+    if (options.autoMaintenance) refreshBackgroundPolicy();
+    return { ...background.snapshot(), pauseDuringPlayback };
+  });
+  if (options.autoMaintenance) {
+    const maintenance: Maintenance = new Maintenance(
+      {
+        schedules: async () => {
+          for (const row of store.db
+            .prepare(
+              "SELECT a.channel_id FROM active_schedules a JOIN channels c ON c.id=a.channel_id WHERE c.archived=0",
+            )
+            .all()) {
+            if (maintenance.stopping) return;
+            try {
+              await programming.ensureBackground(
+                String(row.channel_id),
+                undefined,
+                () => maintenance.stopping,
+              );
+            } catch {
+              app.log.warn(
+                "Schedule extension deferred; programming unavailable",
+              );
+            }
+            await maintenance.yield();
+          }
+        },
+        housekeeping: async () => {
+          playback.collect();
+          collections.purge();
+          reports.purge();
+          await streaming.cleanup();
+        },
+        refresh: async () => {
+          await refresh.tick();
+        },
+      },
+      (lane) => app.log.error({ lane }, "Maintenance lane failed"),
+    );
+    maintenanceLanes = maintenance;
+    backgroundPolicyTimer = setInterval(refreshBackgroundPolicy, 2000);
+    backgroundPolicyTimer.unref();
     app.addHook("onReady", async () => {
-      void maintain().catch(() => app.log.error("Maintenance failed"));
+      refreshBackgroundPolicy();
+      maintenance.start();
     });
-    app.addHook("onClose", async () => {
-      stopping = true;
-      clearInterval(timer);
-      await refresh.stop();
-      await task;
+    app.addHook("onResponse", async (request) => {
+      if (request.method === "POST" && request.url.startsWith("/api/playback"))
+        refreshBackgroundPolicy();
     });
   }
 

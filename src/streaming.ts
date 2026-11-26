@@ -41,6 +41,8 @@ export class StreamingService {
   >();
   private stopping = false;
   private cleanupJob: Promise<void> | undefined;
+  private lastCleanup = 0;
+  private publishedSinceCleanup = 0;
   constructor(
     private readonly store: Store,
     private readonly playback: PlaybackService,
@@ -455,15 +457,29 @@ export class StreamingService {
         "Invalid playback output",
       );
       await rename(temporary, output);
+      this.publishedSinceCleanup += bytes.length;
       return bytes;
     } finally {
       await rm(temporary, { force: true });
     }
   }
   cleanup(now = Date.now()): Promise<void> {
-    this.cleanupJob ??= this.evictCache(now).finally(() => {
-      this.cleanupJob = undefined;
-    });
+    if (this.cleanupJob) return this.cleanupJob;
+    if (
+      now - this.lastCleanup < 30000 &&
+      this.publishedSinceCleanup < 16 * 1024 * 1024
+    )
+      return Promise.resolve();
+    // Leave 32 MiB headroom: up to 16 MiB new finals between scans and two
+    // active outputs, each bounded below 8 MiB. Count publications during cleanup.
+    this.publishedSinceCleanup = 0;
+    this.cleanupJob = this.evictCache(now)
+      .then(() => {
+        this.lastCleanup = now;
+      })
+      .finally(() => {
+        this.cleanupJob = undefined;
+      });
     return this.cleanupJob;
   }
   private async evictCache(now: number) {
@@ -490,7 +506,7 @@ export class StreamingService {
     for (const file of files)
       if (
         file.mtime < now - 10 * 60000 ||
-        bytes > this.maxBytes - 16 * 1024 * 1024
+        bytes > Math.max(0, this.maxBytes - 32 * 1024 * 1024)
       ) {
         await rm(file.path, { force: true });
         bytes -= file.size;

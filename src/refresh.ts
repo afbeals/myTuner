@@ -4,6 +4,7 @@ import {
   createDecipheriv,
   randomBytes,
   randomUUID,
+  createHash,
 } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,7 +12,15 @@ import type { Store } from "./database.js";
 import { invariant } from "./domain.js";
 import { scanSource } from "./catalog.js";
 import { sourceById } from "./security.js";
-import { importMetadata, readIntegration } from "./integrations.js";
+import { importMetadata, integrationUrl } from "./integrations.js";
+import { BackgroundWork } from "./background-work.js";
+import {
+  ProviderSuggestions,
+  mappingSourceRevision,
+  previewMappings,
+  validateMappings,
+} from "./setup-suggestions.js";
+import type { ProviderConnection } from "./setup-suggestions.js";
 import type { PathMapping, Fetcher } from "./integrations.js";
 export async function loadIntegrationKey(
   root: string,
@@ -72,7 +81,8 @@ export function unseal(key: Buffer, value: string): string {
 export interface IntegrationConfig {
   provider: "sonarr" | "radarr";
   url: string;
-  apiKey: string;
+  apiKey?: string | undefined;
+  reuseSourceId?: string | undefined;
   mappings: PathMapping[];
 }
 export class RefreshService {
@@ -81,15 +91,26 @@ export class RefreshService {
     { signature: string; promise: Promise<unknown> }
   >();
   private controller = new AbortController();
+  private readonly providers: ProviderSuggestions | undefined;
   constructor(
     private readonly store: Store,
     private readonly key?: Buffer,
     private readonly fetcher: Fetcher = fetch,
-  ) {}
+    private readonly background?: BackgroundWork,
+  ) {
+    if (key)
+      this.providers = new ProviderSuggestions(
+        store,
+        key,
+        fetcher,
+        this.controller.signal,
+      );
+  }
   configure(sourceId: string, input: IntegrationConfig) {
     invariant(this.key, 503, "Integration key storage is unavailable");
+    validateMappings(input.mappings);
     const src = sourceById(this.store, sourceId),
-      url = new URL(input.url);
+      url = integrationUrl(input.url);
     invariant(
       ["http:", "https:"].includes(url.protocol) &&
         !url.username &&
@@ -104,6 +125,36 @@ export class RefreshService {
       400,
       "Integration type does not match source",
     );
+    const existing = this.store.db
+      .prepare(
+        "SELECT provider,url,encrypted_key FROM integrations WHERE source_id=?",
+      )
+      .get(sourceId);
+    const reusable =
+      !input.apiKey && input.reuseSourceId
+        ? this.configuration(input.reuseSourceId)
+        : undefined;
+    invariant(
+      !input.reuseSourceId ||
+        input.apiKey ||
+        (reusable &&
+          reusable.provider === input.provider &&
+          integrationUrl(reusable.url).toString() === url.toString()),
+      400,
+      "Saved connection does not match this provider and application URL",
+    );
+    invariant(
+      input.apiKey ||
+        reusable ||
+        (existing &&
+          existing.provider === input.provider &&
+          integrationUrl(String(existing.url)).toString() === url.toString()),
+      400,
+      "Enter an API key for a new integration or when changing its application URL",
+    );
+    const encryptedKey = input.apiKey
+      ? seal(this.key, input.apiKey)
+      : String(reusable?.encrypted_key ?? existing!.encrypted_key);
     this.store.db
       .prepare(
         "INSERT INTO integrations(id,source_id,provider,url,encrypted_key,mappings_json) VALUES(?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET provider=excluded.provider,url=excluded.url,encrypted_key=excluded.encrypted_key,mappings_json=excluded.mappings_json,last_success=NULL",
@@ -112,13 +163,16 @@ export class RefreshService {
         randomUUID(),
         sourceId,
         input.provider,
-        input.url,
-        seal(this.key, input.apiKey),
+        url.toString(),
+        encryptedKey,
         JSON.stringify(input.mappings),
       );
     this.store.db
       .prepare("DELETE FROM refresh_attempts WHERE source_id=?")
       .run(sourceId);
+  }
+  isScanning(sourceId: string) {
+    return this.running.has(sourceId);
   }
   private recordAttempt(
     sourceId: string,
@@ -173,25 +227,195 @@ export class RefreshService {
         }
       | undefined;
   }
-  scan(sourceId: string): Promise<unknown> {
+  private configRevision(sourceId: string) {
+    return createHash("sha256")
+      .update(JSON.stringify(this.configuration(sourceId)) ?? "none")
+      .digest("hex");
+  }
+  private connection(
+    sourceId: string,
+    draft?: {
+      provider: "sonarr" | "radarr";
+      url: string;
+      apiKey?: string | undefined;
+      reuseSourceId?: string | undefined;
+    },
+  ): ProviderConnection {
+    invariant(
+      this.key && this.providers,
+      503,
+      "Integration key storage is unavailable",
+    );
+    const source = sourceById(this.store, sourceId),
+      saved = this.configuration(sourceId);
+    const provider = draft?.provider ?? saved?.provider;
+    const url = integrationUrl(
+      draft?.url ?? saved?.url ?? "http://invalid",
+    ).toString();
+    invariant(
+      provider && source.kind === (provider === "sonarr" ? "shows" : "movies"),
+      400,
+      "Integration type does not match source",
+    );
+    const reusable =
+      !draft?.apiKey && draft?.reuseSourceId
+        ? this.configuration(draft.reuseSourceId)
+        : undefined;
+    invariant(
+      !draft?.reuseSourceId ||
+        draft?.apiKey ||
+        (reusable &&
+          reusable.provider === provider &&
+          integrationUrl(reusable.url).toString() === url),
+      400,
+      "Saved connection does not match this provider and application URL",
+    );
+    const unchanged =
+      saved &&
+      saved.provider === provider &&
+      integrationUrl(saved.url).toString() === url;
+    invariant(
+      draft?.apiKey || reusable || unchanged,
+      400,
+      "Enter an API key for a new integration or when changing its application URL",
+    );
+    return {
+      provider,
+      url,
+      apiKey:
+        draft?.apiKey ||
+        unseal(this.key, reusable?.encrypted_key ?? saved!.encrypted_key),
+    };
+  }
+  suggestions(sourceId: string) {
+    const source = sourceById(this.store, sourceId),
+      configured = this.configuration(sourceId);
+    const empty = {
+      roots: [],
+      observedAt: null,
+      lastAttemptAt: null,
+      error: null,
+      stale: true,
+      revision: "",
+      inventoryAvailable: false,
+    };
+    return {
+      ...(configured && this.providers
+        ? this.providers.snapshot(this.connection(sourceId))
+        : empty),
+      sourceRevision: mappingSourceRevision(source),
+      configRevision: this.configRevision(sourceId),
+    };
+  }
+  async refreshSuggestions(
+    sourceId: string,
+    draft: {
+      provider: "sonarr" | "radarr";
+      url: string;
+      apiKey?: string | undefined;
+      reuseSourceId?: string | undefined;
+    },
+    configRevision: string,
+    authorize: () => void,
+  ) {
+    authorize();
+    invariant(
+      this.configRevision(sourceId) === configRevision,
+      409,
+      "Integration changed; reload before checking suggestions",
+    );
+    const sourceRevision = mappingSourceRevision(
+      sourceById(this.store, sourceId),
+    );
+    const reuseRevision =
+      !draft.apiKey && draft.reuseSourceId
+        ? this.configRevision(draft.reuseSourceId)
+        : null;
+    const connection = this.connection(sourceId, draft);
+    const snapshot = await this.providers!.refresh(connection);
+    authorize();
+    invariant(
+      this.configRevision(sourceId) === configRevision &&
+        (!draft.reuseSourceId ||
+          draft.apiKey ||
+          this.configRevision(draft.reuseSourceId) === reuseRevision) &&
+        mappingSourceRevision(sourceById(this.store, sourceId)) ===
+          sourceRevision,
+      409,
+      "Source or integration changed; reload suggestions",
+    );
+    return { ...snapshot, sourceRevision, configRevision };
+  }
+  previewMapping(
+    sourceId: string,
+    input: {
+      provider: "sonarr" | "radarr";
+      url: string;
+      apiKey?: string | undefined;
+      reuseSourceId?: string | undefined;
+      mappings: PathMapping[];
+      sourceRevision: string;
+      configRevision: string;
+      inventoryRevision: string;
+      paths?: string[] | undefined;
+    },
+  ) {
+    const source = sourceById(this.store, sourceId);
+    invariant(
+      mappingSourceRevision(source) === input.sourceRevision &&
+        this.configRevision(sourceId) === input.configRevision,
+      409,
+      "Source or integration changed; reload before checking mappings",
+    );
+    validateMappings(input.mappings);
+    const connection = this.connection(sourceId, input),
+      snapshot = this.providers!.snapshot(connection);
+    invariant(
+      snapshot.revision === input.inventoryRevision,
+      409,
+      "Provider suggestions changed; refresh the preview",
+    );
+    const inventory = this.providers!.previewItems(connection);
+    const paths =
+      input.paths ?? inventory?.slice(0, 20).map((item) => item.path) ?? [];
+    return {
+      sourceRevision: input.sourceRevision,
+      configRevision: input.configRevision,
+      inventoryRevision: snapshot.revision,
+      items: previewMappings(this.store, source, input.mappings, paths),
+      sampled: paths.length,
+      cachedFileCount: inventory?.length ?? null,
+      complete: inventory !== null && inventory.length <= 20,
+      needsFileInventory: !inventory && !input.paths,
+    };
+  }
+  scan(
+    sourceId: string,
+    options: { automatic?: boolean } = {},
+  ): Promise<unknown> {
     invariant(!this.controller.signal.aborted, 503, "Server is stopping");
     const config = this.configuration(sourceId),
       signature = JSON.stringify(config) ?? "none";
     const existing = this.running.get(sourceId);
     if (existing) {
       if (existing.signature === signature) return existing.promise;
-      return existing.promise.catch(() => {}).then(() => this.scan(sourceId));
+      return existing.promise
+        .catch(() => {})
+        .then(() => this.scan(sourceId, options));
     }
     invariant(this.running.size < 2, 429, "Source refresh limit reached");
-    const job = this.refresh(sourceId, config).finally(() =>
-      this.running.delete(sourceId),
-    );
+    const job = this.refresh(
+      sourceId,
+      config,
+      options.automatic ?? false,
+    ).finally(() => this.running.delete(sourceId));
     this.running.set(sourceId, { signature, promise: job });
     return job;
   }
   private async refresh(
     sourceId: string,
     config: ReturnType<RefreshService["configuration"]>,
+    automatic: boolean,
   ) {
     const current = () =>
       JSON.stringify(this.configuration(sourceId)) === JSON.stringify(config);
@@ -200,21 +424,41 @@ export class RefreshService {
     this.recordAttempt(sourceId, startedMs);
     try {
       const src = sourceById(this.store, sourceId),
-        scan = await scanSource(
-          this.store,
-          src,
-          undefined,
-          this.controller.signal,
-        );
+        scan = this.background
+          ? await this.background.run(
+              "scan",
+              this.controller.signal,
+              (checkpoint) =>
+                scanSource(
+                  this.store,
+                  src,
+                  undefined,
+                  this.controller.signal,
+                  checkpoint,
+                ),
+            )
+          : await scanSource(
+              this.store,
+              src,
+              undefined,
+              this.controller.signal,
+            );
       let imported: unknown;
       if (config) {
         invariant(this.key, 503, "Integration key storage is unavailable");
-        const items = await readIntegration(
-          config.provider,
-          config.url,
-          unseal(this.key, config.encrypted_key),
-          this.fetcher,
-          this.controller.signal,
+        const previousImport = Number(
+          this.store.db
+            .prepare("SELECT last_success FROM integrations WHERE source_id=?")
+            .get(sourceId)?.last_success ?? 0,
+        );
+        const items = await this.providers!.items(
+          {
+            provider: config.provider,
+            url: config.url,
+            apiKey: unseal(this.key, config.encrypted_key),
+          },
+          previousImport,
+          !automatic,
         );
         if (!current()) return { ...scan, superseded: true };
         const report = recordIntegrationReport(
@@ -282,7 +526,7 @@ export class RefreshService {
     for (const job of jobs) {
       if (this.controller.signal.aborted) return;
       try {
-        await this.scan(job.source_id);
+        await this.scan(job.source_id, { automatic: true });
       } catch {
         /* Detailed sanitized status is persisted per source. */
       }
@@ -291,7 +535,9 @@ export class RefreshService {
   async stop() {
     this.controller.abort();
     await Promise.allSettled(
-      [...this.running.values()].map((job) => job.promise),
+      [...this.running.values()]
+        .map((job) => job.promise)
+        .concat(this.providers ? [this.providers.stop()] : []),
     );
   }
 }

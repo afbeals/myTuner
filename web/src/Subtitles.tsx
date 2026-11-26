@@ -1,3 +1,4 @@
+import { SourcePathField } from "./SourcePathField";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { ErrorBox, Field, Form, Load, Select, useRemote } from "./ui";
@@ -142,10 +143,12 @@ export function SubtitleSettings({
             />
             Automatically discover subtitles during scans
           </label>
-          <Field
+          <SourcePathField
             label="Separate subtitle root (optional)"
+            purpose="subtitles"
+            sourceId={sourceId}
             value={draft.root ?? ""}
-            onChange={(e) => change({ root: e.target.value || null })}
+            onChange={(value) => change({ root: value || null })}
             placeholder="/subtitles/shows"
             hint="Existing server/container directory mounted read-only. Relative media directories are mirrored below this root."
           />
@@ -158,6 +161,41 @@ export function SubtitleSettings({
             }}
             hint="Comma-separated relative folders, such as Subs, Subtitles or Captions/English. Video basenames must match; ambiguous files need a manual choice."
           />
+          <div className="actions" aria-label="Subtitle folder presets">
+            {["Subs", "Subtitles", "Captions"].map((folder) => (
+              <button
+                key={folder}
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setFolders((old) =>
+                    [
+                      ...new Set([
+                        ...old
+                          .split(",")
+                          .map((value) => value.trim())
+                          .filter(Boolean),
+                        folder,
+                      ]),
+                    ].join(", "),
+                  );
+                  setSaved(false);
+                }}
+              >
+                Add {folder}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setFolders("");
+                change({ maxDepth: 0 });
+              }}
+            >
+              Direct siblings only
+            </button>
+          </div>
           <Select
             label="Nested subtitle folder depth"
             value={draft.maxDepth}
@@ -367,6 +405,39 @@ export function SubtitlePanel({
                   <option value="media">Media source</option>
                   <option value="subtitles">Configured subtitle root</option>
                 </Select>
+                {info.tracks.some((track) => track.relativePath) && (
+                  <Select
+                    label="Recorded subtitle candidate"
+                    value=""
+                    onChange={(event) => {
+                      const track = info.tracks.find(
+                        (candidate) =>
+                          String(candidate.index) === event.target.value,
+                      );
+                      if (track?.relativePath)
+                        edit({
+                          rootKind: track.rootKind as Manual["rootKind"],
+                          relativePath: track.relativePath,
+                        });
+                    }}
+                  >
+                    <option value="">
+                      Choose a previously recorded candidate
+                    </option>
+                    {info.tracks
+                      .filter((track) => track.relativePath)
+                      .map((track) => (
+                        <option key={track.index} value={track.index}>
+                          {track.rootKind === "subtitles"
+                            ? "Subtitle root"
+                            : "Media root"}
+                          : {track.relativePath} ·{" "}
+                          {track.language ?? "Unknown language"} ·{" "}
+                          {track.status}
+                        </option>
+                      ))}
+                  </Select>
+                )}
                 <Field
                   label="Relative subtitle filename"
                   value={manual.relativePath}

@@ -1,3 +1,4 @@
+import { SourcePathField } from "./SourcePathField";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Field, Form, Modal, Load, Select, ErrorBox } from "./ui";
@@ -337,9 +338,11 @@ export function MetadataLocation({
       }}
     >
       <h3>Read-only metadata location</h3>
-      <Field
+      <SourcePathField
         label="Metadata container directory (optional)"
         name="root"
+        purpose="metadata"
+        sourceId={sourceId}
         defaultValue={initialRoot ?? ""}
         placeholder="/metadata/shows"
         hint="Blank uses files beside videos. A separate root mirrors this source’s relative folders and filenames."

@@ -21,7 +21,7 @@ export function mapIntegrationPath(
   );
   for (const mapping of candidates) {
     const from = normalize(mapping.from),
-      windows = /^[a-z]:/i.test(from);
+      windows = /^[a-z]:/i.test(from) || from.startsWith("//");
     const comparable = windows ? normalized.toLowerCase() : normalized,
       prefix = windows ? from.toLowerCase() : from;
     if (comparable === prefix || comparable.startsWith(prefix + "/"))
@@ -46,6 +46,8 @@ const seriesSchema = z.array(
     overview: z.string().nullish(),
     images,
     tvdbId: z.number().optional(),
+    rootFolderPath: z.string().nullish(),
+    path: z.string().nullish(),
   }),
 );
 const episodeSchema = z.array(
@@ -69,6 +71,8 @@ const movieSchema = z.array(
     overview: z.string().nullish(),
     images,
     hasFile: z.boolean().nullish(),
+    rootFolderPath: z.string().nullish(),
+    path: z.string().nullish(),
     movieFile: z.object({ path: z.string().nullish() }).nullish(),
     collection: z
       .object({ title: z.string(), tmdbId: z.number().optional() })
@@ -84,13 +88,17 @@ export interface ImportedItem {
   metadata: Record<string, unknown>;
 }
 export type Fetcher = typeof fetch;
-export async function readIntegration(
-  provider: "sonarr" | "radarr",
-  baseUrl: string,
-  apiKey: string,
-  fetcher: Fetcher = fetch,
-  signal?: AbortSignal,
-): Promise<ImportedItem[]> {
+export type Provider = "sonarr" | "radarr";
+export type ProviderInventory =
+  | { provider: "sonarr"; entries: z.infer<typeof seriesSchema> }
+  | { provider: "radarr"; entries: z.infer<typeof movieSchema> };
+export interface ObservedRoot {
+  path: string;
+  itemCount: number;
+  samples: string[];
+  origin: "provider-inventory";
+}
+export function integrationUrl(baseUrl: string): URL {
   const base = new URL(baseUrl);
   invariant(
     ["http:", "https:"].includes(base.protocol) &&
@@ -101,24 +109,99 @@ export async function readIntegration(
     400,
     "Invalid integration URL",
   );
-  async function get(path: string): Promise<unknown> {
-    const url = new URL(base.toString());
-    const [pathname, query] = path.split("?");
-    url.pathname = base.pathname.replace(/\/$/, "") + "/api/v3/" + pathname;
-    url.search = query ?? "";
-    const response = await fetcher(url, {
-      headers: { "X-Api-Key": apiKey },
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(20_000)])
-        : AbortSignal.timeout(20_000),
-      redirect: "error",
-    });
-    invariant(response.ok, 502, "Integration request failed");
-    return response.json();
+  base.pathname = base.pathname.replace(/\/+$/, "") || "/";
+  return base;
+}
+async function integrationGet(
+  baseUrl: string,
+  apiKey: string,
+  path: string,
+  fetcher: Fetcher,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const url = integrationUrl(baseUrl);
+  const [pathname, query] = path.split("?");
+  url.pathname = url.pathname.replace(/\/$/, "") + "/api/v3/" + pathname;
+  url.search = query ?? "";
+  const response = await fetcher(url, {
+    headers: { "X-Api-Key": apiKey },
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(20_000)])
+      : AbortSignal.timeout(20_000),
+    redirect: "error",
+  });
+  invariant(response.ok, 502, "Integration request failed");
+  return response.json();
+}
+export async function readProviderInventory(
+  provider: Provider,
+  baseUrl: string,
+  apiKey: string,
+  fetcher: Fetcher = fetch,
+  signal?: AbortSignal,
+): Promise<ProviderInventory> {
+  if (provider === "sonarr")
+    return {
+      provider,
+      entries: seriesSchema.parse(
+        await integrationGet(baseUrl, apiKey, "series", fetcher, signal),
+      ),
+    };
+  return {
+    provider,
+    entries: movieSchema.parse(
+      await integrationGet(baseUrl, apiKey, "movie", fetcher, signal),
+    ),
+  };
+}
+export function observedRoots(inventory: ProviderInventory): ObservedRoot[] {
+  const roots = new Map<string, ObservedRoot>();
+  for (const entry of inventory.entries) {
+    const supplied = entry.rootFolderPath?.trim().replace(/\\/g, "/") ?? "";
+    const path =
+      supplied === "/" || /^[a-z]:\/$/i.test(supplied)
+        ? supplied
+        : supplied.replace(/\/+$/, "");
+    if (
+      !path ||
+      path.length > 4096 ||
+      path.split("/").includes("..") ||
+      !/^(?:\/|[a-z]:\/)/i.test(path)
+    )
+      continue;
+    let root = roots.get(path);
+    if (!root) {
+      if (roots.size >= 256) continue;
+      root = { path, itemCount: 0, samples: [], origin: "provider-inventory" };
+      roots.set(path, root);
+    }
+    root.itemCount++;
+    if (entry.path && root.samples.length < 3)
+      root.samples.push(entry.path.slice(0, 4096));
   }
+  return [...roots.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+export async function readIntegration(
+  provider: Provider,
+  baseUrl: string,
+  apiKey: string,
+  fetcher: Fetcher = fetch,
+  signal?: AbortSignal,
+  existingInventory?: ProviderInventory,
+): Promise<ImportedItem[]> {
+  const inventory =
+    existingInventory ??
+    (await readProviderInventory(provider, baseUrl, apiKey, fetcher, signal));
+  invariant(
+    inventory.provider === provider,
+    400,
+    "Provider inventory does not match connection",
+  );
+  const get = (path: string) =>
+    integrationGet(baseUrl, apiKey, path, fetcher, signal);
   const out: ImportedItem[] = [];
-  if (provider === "sonarr") {
-    for (const series of seriesSchema.parse(await get("series"))) {
+  if (inventory.provider === "sonarr") {
+    for (const series of inventory.entries) {
       const episodes = episodeSchema.parse(
         await get(`episode?seriesId=${series.id}`),
       );
@@ -170,7 +253,7 @@ export async function readIntegration(
       }
     }
   } else {
-    for (const movie of movieSchema.parse(await get("movie")))
+    for (const movie of inventory.entries)
       if (movie.hasFile !== false && movie.movieFile?.path) {
         out.push({
           provider,

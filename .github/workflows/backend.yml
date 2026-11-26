@@ -1,7 +1,11 @@
 name: myTuner checks
 on:
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -39,26 +43,52 @@ jobs:
       - run: npm test
       - run: npm run test:smoke
 
-  browser:
+  browser-tests:
+    name: Browser shard ${{ matrix.shard }}/3
     runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+      - name: Configure browser cache directory
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/playwright-browsers" >> "$GITHUB_ENV"
       - run: command -v ffmpeg || brew install ffmpeg
       - run: npm ci
       - run: npm run build
-      - run: npx playwright install chromium
-      - run: npm run test:ui
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: ${{ runner.os }}-${{ runner.arch }}-chromium-${{ hashFiles('package-lock.json') }}
+      - run: ./node_modules/.bin/playwright install chromium
+      - run: npm run test:ui -- --shard=${{ matrix.shard }}/3
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: browser-test-results
+          name: browser-test-results-${{ matrix.shard }}
           path: |
             playwright-report/
             test-results/
+  # Keep the existing required-check name. Missing/cancelled shards cannot pass.
+  browser:
+    runs-on: ubuntu-latest
+    if: always()
+    needs: browser-tests
+    steps:
+      - name: Require every browser shard
+        env:
+          SHARDS_RESULT: ${{ needs.browser-tests.result }}
+        run: test "$SHARDS_RESULT" = success
+
   android:
     runs-on: ubuntu-latest
     steps:
@@ -87,7 +117,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: docker/setup-buildx-action@v3
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mytuner-build-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', 'package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', 'package-lock.json') }}-
+            ${{ runner.os }}-buildx-
       - run: npm run docker:build
+        env:
+          MYTUNER_BUILD_CACHE_FROM: type=local,src=${{ runner.temp }}/mytuner-build-cache
+          MYTUNER_BUILD_CACHE_TO: type=local,dest=${{ runner.temp }}/mytuner-build-cache-next,mode=max
+      - name: Retain the latest Docker layers
+        run: |
+          rm -rf "$RUNNER_TEMP/mytuner-build-cache"
+          mv "$RUNNER_TEMP/mytuner-build-cache-next" "$RUNNER_TEMP/mytuner-build-cache"
       - run: npm run docker:test
       - uses: actions/upload-artifact@v4
         if: always()

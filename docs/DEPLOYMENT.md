@@ -1,8 +1,12 @@
 # Standalone Docker and Unraid deployment
 
-Status: server/browser version 0.2.1 includes the server, browser manager/player and a locally built native TV POC APK. Docker is unavailable in the implementation environment, so image build/runtime and Unraid permissions have not been validated. No image has been published. Actual household deployment and device acceptance remain open.
+Status: server/browser version **0.2.2** is the current working update; the native TV POC remains **0.2.0**. The owner has built and deployed 0.2.1 on Unraid and confirmed source/metadata loading after correcting storage, port and root mappings. No 0.2.2 image build, publication or target-host verification is claimed. Docker is unavailable on the implementation Mac; repeat Windows acceptance and Unraid lifecycle checks for this update. Physical-device acceptance remains open.
 
 Read [OPERATIONS.md](OPERATIONS.md) for onboarding, budgets, cleanup, backup/restore and diagnosis; [ARCHITECTURE.md](ARCHITECTURE.md) explains process/storage boundaries.
+
+## Recommended Unraid Docker-tab workflow
+
+Use [Unraid Docker-tab setup](UNRAID_DOCKER_TAB.md) for the same publish/pull/container-form route as Finapp and Tide. It requires an explicit TCP host-port mapping, three separate writable paths and read-only media paths. No Compose installation, source checkout or `.env` file is required on Unraid for this route. Keep Extra Parameters blank and Autostart off for the owner’s chosen manual lifecycle. The Compose instructions below remain an alternative.
 
 ## Image workflow
 
@@ -28,7 +32,7 @@ Port: host 8777 -> container 8777 by default. Follow the ordered first-installat
 
 ## First installation on Unraid
 
-Unraid does not provide Docker Compose by default. One supported setup path is **Community Applications → Docker Compose Manager** (check the plugin's compatibility with your Unraid version), with Docker enabled under Settings → Docker. This project has no published image or Community Applications template yet.
+Unraid does not provide Docker Compose by default. One supported setup path is **Community Applications → Docker Compose Manager** (check the plugin's compatibility with your Unraid version), with Docker enabled under Settings → Docker. Use the image/repository the owner publishes through the Windows release workflow. No Community Applications template is provided.
 
 Place `docker-compose.yml` and a private `.env` together on the Unraid appdata pool outside media, for example `/mnt/YOUR_POOL/appdata/mytuner/project`. Do not place writable runtime roots under the checkout or a media source. Compose contains only an image reference: it cannot silently rebuild a different candidate on Unraid. Use the same working directory and `.env` for maintenance commands.
 

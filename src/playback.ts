@@ -1,4 +1,4 @@
-import { displayMedia } from "./display-metadata.js";
+import { createMediaProjector } from "./display-metadata.js";
 import { clearProfileUnlocks } from "./identity.js";
 import type { ProgrammingService } from "./programming.js";
 import { randomUUID } from "node:crypto";
@@ -9,7 +9,7 @@ import {
   visibleChannel,
   requireChannelMedia,
   requireProfile,
-  canReadMedia,
+  createMediaAuthorizer,
 } from "./security.js";
 import { resolveLive } from "./scheduler.js";
 interface Session {
@@ -25,6 +25,20 @@ interface Session {
   auth_session_hash: string | null;
 }
 export class PlaybackService {
+  // Optional-work admission uses observed forward delivery, never status polling.
+  // This is disposable evidence, capped at 1,024 sessions and one minute of age.
+  private delivery = new Map<string, { at: number; endMs: number }>();
+  private pruneDelivery(now: number) {
+    for (const [id, value] of this.delivery)
+      if (now < value.at || now - value.at > 60000) this.delivery.delete(id);
+  }
+  isDelivering(id: string, now = Date.now(), windowMs = 15000): boolean {
+    this.pruneDelivery(now);
+    const value = this.delivery.get(id);
+    return Boolean(
+      value && now - value.at <= Math.max(0, Math.min(windowMs, 60000)),
+    );
+  }
   constructor(
     private readonly store: Store,
     private readonly programming?: ProgrammingService,
@@ -144,9 +158,12 @@ export class PlaybackService {
       position,
       row.revision_id,
     );
-    this.store.db
-      .prepare("UPDATE playback_sessions SET last_seen=? WHERE id=?")
-      .run(now, id);
+    // Session liveness has a 24-hour collection TTL; persisting each one-second
+    // poll needlessly forces a durable commit. Authorization still runs above.
+    if (now - row.last_seen >= 30000 || now < row.last_seen)
+      this.store.db
+        .prepare("UPDATE playback_sessions SET last_seen=? WHERE id=?")
+        .run(now, id);
     let available = false;
     if (live) {
       const item = this.store.db
@@ -162,8 +179,6 @@ export class PlaybackService {
       const item = this.store.db
         .prepare("SELECT * FROM media WHERE id=?")
         .get(live.entry.mediaId) as unknown as import("./domain.js").Media;
-      const display = displayMedia(this.store, item);
-      const data = JSON.parse(display.metadata_json);
       const airing = this.store.db
         .prepare(
           "SELECT MIN(start_ms) AS startMs,MAX(end_ms) AS endMs,SUM(CASE WHEN kind='program' THEN end_ms-start_ms ELSE 0 END) AS contentDurationMs,SUM(CASE WHEN kind='program' THEN MAX(0,MIN(end_ms,?)-start_ms) ELSE 0 END) AS contentElapsedMs FROM schedule_entries WHERE revision_id=? AND program_id=?",
@@ -189,14 +204,26 @@ export class PlaybackService {
         )
         .get(row.revision_id, live.entry.programId) as unknown as
         import("./domain.js").Media | undefined;
+      const project = createMediaProjector(this.store, [
+        item,
+        ...(program ? [program] : []),
+        ...(next ? [next] : []),
+      ]);
+      const display = project(item),
+        data = JSON.parse(display.metadata_json);
+      const authorized = createMediaAuthorizer(
+        this.store,
+        account,
+        row.profile_id,
+      );
       const programMetadata =
-        program && canReadMedia(this.store, account, row.profile_id, program)
-          ? JSON.parse(displayMedia(this.store, program).metadata_json)
+        program && authorized(program)
+          ? JSON.parse(project(program).metadata_json)
           : null;
       context = {
         program: programMetadata
           ? {
-              title: displayMedia(this.store, program!).title,
+              title: project(program!).title,
               seriesTitle: programMetadata.seriesTitle ?? null,
               seasonNumber: programMetadata.seasonNumber ?? null,
               episodeNumber: programMetadata.episodeNumber ?? null,
@@ -212,9 +239,9 @@ export class PlaybackService {
         remainingMs: Math.max(0, live.entry.endMs - position),
         airing,
         next:
-          next && canReadMedia(this.store, account, row.profile_id, next)
+          next && authorized(next)
             ? {
-                title: displayMedia(this.store, next).title,
+                title: project(next).title,
                 startMs: next.startMs,
               }
             : null,
@@ -321,7 +348,7 @@ export class PlaybackService {
       409,
       "Event identifier already used",
     );
-    this.store.db
+    const inserted = this.store.db
       .prepare(
         "INSERT OR IGNORE INTO playback_events(id,session_id,account_id,channel_id,entry_id,start_ms,end_ms,created_ms,media_id,kind,program_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       )
@@ -338,6 +365,16 @@ export class PlaybackService {
         entry.kind,
         entry.program_id,
       );
+    if (Number(inserted.changes) === 1) {
+      this.pruneDelivery(now);
+      const previous = this.delivery.get(id);
+      if (!previous || event.endMs > previous.endMs) {
+        this.delivery.delete(id);
+        if (this.delivery.size >= 1024)
+          this.delivery.delete(this.delivery.keys().next().value!);
+        this.delivery.set(id, { at: now, endMs: event.endMs });
+      }
+    }
   }
   history(account: Account, id: string) {
     const session = this.session(account, id);
@@ -351,16 +388,30 @@ export class PlaybackService {
       end_ms: number;
       media_id: string;
     }[];
+    const authorized = createMediaAuthorizer(
+      this.store,
+      account,
+      session.profile_id,
+    );
+    const allowed = new Set(
+      (
+        this.store.db
+          .prepare(
+            "SELECT id,source_id,relative_path FROM media WHERE id IN (SELECT value FROM json_each(?))",
+          )
+          .all(
+            JSON.stringify([...new Set(rows.map((row) => row.media_id))]),
+          ) as unknown as import("./domain.js").Media[]
+      )
+        .filter(authorized)
+        .map((item) => item.id),
+    );
     let deliveredMs = 0,
       lastEntry = "",
       end = 0;
     let eventCount = 0;
     for (const row of rows) {
-      const item = this.store.db
-        .prepare("SELECT * FROM media WHERE id=?")
-        .get(row.media_id) as import("./domain.js").Media | undefined;
-      if (!item || !canReadMedia(this.store, account, session.profile_id, item))
-        continue;
+      if (!allowed.has(row.media_id)) continue;
       eventCount++;
       if (row.entry_id !== lastEntry) {
         lastEntry = row.entry_id;
@@ -372,6 +423,7 @@ export class PlaybackService {
     return { deliveredMs, eventCount };
   }
   collect(now = Date.now(), ttlMs = 24 * 3600000) {
+    this.pruneDelivery(now);
     this.store.db
       .prepare(
         "DELETE FROM playback_sessions WHERE last_seen<? OR auth_session_hash IS NOT NULL AND NOT EXISTS(SELECT 1 FROM sessions s WHERE s.token_hash=auth_session_hash AND s.expires_at>? )",
@@ -406,5 +458,6 @@ export class PlaybackService {
   leave(account: Account, id: string): void {
     this.session(account, id, Date.now(), false);
     this.store.db.prepare("DELETE FROM playback_sessions WHERE id=?").run(id);
+    this.delivery.delete(id);
   }
 }

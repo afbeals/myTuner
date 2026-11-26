@@ -33,6 +33,8 @@ export function Artwork({
     <img
       className={className}
       src={url}
+      loading="lazy"
+      decoding="async"
       alt={title}
       onError={() => setFailed(true)}
     />
@@ -135,11 +137,11 @@ export function LibraryPage(
 ) {
   const [search, setSearch] = useState(""),
     [query, setQuery] = useState(""),
-    library = useRemoteLibrary(props, query),
     [source, setSource] = useState(""),
     [kind, setKind] = useState("all"),
     [dense, setDense] = useState(false),
     [page, setPage] = useState(1),
+    library = useRemoteLibrary(props, query, source, kind, page),
     [selected, setSelected] = useState<Choice | null>(null),
     [picked, setPicked] = useState<string[]>([]),
     [collect, setCollect] = useState(false),
@@ -212,6 +214,11 @@ export function LibraryPage(
     setDeletedOpen(false);
   }, [props.profileId]);
   useEffect(() => setPage(1), [search, source, kind]);
+  useEffect(() => {
+    if (library.loading || !library.data?.pagination) return;
+    const lastPage = Math.max(1, Math.ceil(library.data.pagination.total / 24));
+    if (page > lastPage) setPage(lastPage);
+  }, [library.loading, library.data?.pagination?.total, page]);
   useEffect(() => {
     const timer = setTimeout(() => setQuery(search), 200);
     return () => clearTimeout(timer);
@@ -383,7 +390,10 @@ export function LibraryPage(
             </section>
           ) : (
             <div className={dense ? "library-list" : "library-grid"}>
-              {list.slice((page - 1) * 24, page * 24).map((item, index) => (
+              {(library.data.pagination
+                ? list
+                : list.slice((page - 1) * 24, page * 24)
+              ).map((item, index) => (
                 <article
                   className="media-card"
                   key={JSON.stringify(item.selection) + index}
@@ -413,12 +423,15 @@ export function LibraryPage(
             </button>
             <p>
               {list.length
-                ? `${(page - 1) * 24 + 1}–${Math.min(page * 24, list.length)}`
+                ? `${(page - 1) * 24 + 1}–${Math.min(page * 24, library.data.pagination?.total ?? list.length)}`
                 : "0"}{" "}
-              of {list.length} permitted items · Page {page}
+              of {library.data.pagination?.total ?? list.length} permitted items
+              · Page {page}
             </p>
             <button
-              disabled={page * 24 >= list.length}
+              disabled={
+                page * 24 >= (library.data.pagination?.total ?? list.length)
+              }
               onClick={() => setPage((v) => v + 1)}
             >
               Next page →
@@ -732,23 +745,29 @@ export function LibraryPage(
     </>
   );
 }
-function useRemoteLibrary(props: Workspace, search = "") {
+function useRemoteLibrary(
+  props: Workspace,
+  search = "",
+  source = "",
+  kind = "all",
+  page = 1,
+) {
+  const params = new URLSearchParams({
+    search,
+    kind,
+    offset: String((page - 1) * 24),
+    limit: "24",
+  });
+  if (source) params.set("sourceId", source);
   const library = useRemote<Library>(
-      `/api/profiles/${props.profileId}/library${search ? `?search=${encodeURIComponent(search)}` : ""}`,
-      props.version,
-      true,
-    ),
-    collection = useRemote<{ items: Collection[] }>(
-      `/api/profiles/${props.profileId}/collections`,
-      props.version,
-    );
+    `/api/profiles/${props.profileId}/library?${params}`,
+    props.version,
+    true,
+  );
   return {
     ...library,
-    collections: collection.data?.items ?? [],
-    reload: () => {
-      library.reload();
-      collection.reload();
-    },
+    collections: library.data?.savedCollections ?? [],
+    reload: library.reload,
   };
 }
 import { useRemote } from "./ui";

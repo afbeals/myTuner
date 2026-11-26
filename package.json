@@ -1,6 +1,6 @@
 {
   "name": "mytuner",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "engines": {
@@ -23,7 +23,7 @@
     "docker:push": "node scripts/docker.mjs push",
     "db:verify": "tsx src/verify-cli.ts",
     "db:restore": "tsx src/restore-cli.ts",
-    "test:smoke": "npm run build && node scripts/smoke.mjs",
+    "test:smoke": "npm run build && node scripts/smoke.mjs && node scripts/catalog-smoke.mjs",
     "dev:web": "vite --config web/vite.config.ts",
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
@@ -37,7 +37,8 @@
     "docker:release": "node scripts/docker.mjs release",
     "docker:preview": "node scripts/docker.mjs preview",
     "docker:check": "node scripts/docker.mjs check",
-    "docker:help": "node scripts/docker.mjs --help"
+    "docker:help": "node scripts/docker.mjs --help",
+    "test:catalog": "npm run build:server && node --expose-gc scripts/catalog-smoke.mjs --large"
   },
   "dependencies": {
     "@fastify/static": "^10.1.10",

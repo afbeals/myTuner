@@ -1,6 +1,6 @@
 # Browser and TV clients
 
-Server/browser version: **0.2.1**. Native Android/Fire OS client: **0.2.0**, version code 2; API compatibility remains version 1.
+Server/browser version: **0.2.2**. Native Android/Fire OS client: **0.2.0**, version code 2; API compatibility remains version 1.
 
 ## Implemented surfaces
 
@@ -14,18 +14,19 @@ Channel setup asks for a full name and optional short name. Supplied short names
 
 ## Browser implementation
 
-| File                        | Responsibility                                                                                                  |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `web/src/App.tsx`           | Cookie sign-in/session restore, role navigation, profile selection/PIN and workspace                            |
-| `web/src/api.ts`            | Same-origin fetch, in-memory CSRF refresh/retry, structured API errors/session expiration                       |
-| `web/src/ui.tsx`            | Fields, asynchronous forms/actions, abortable reads, dialog focus, loading/error/empty states                   |
-| `web/src/Channels.tsx`      | Channel identity, group order/modes/selectors, commercial rules, preview/publish, archive/restore               |
-| `web/src/Library.tsx`       | Artwork, show/season/folder/provider/saved selections, grid/list and collection references                      |
-| `web/src/Management.tsx`    | Accounts, profiles/grants/PIN, source scan/integration/refresh, subscriptions, generation, pairing and sessions |
-| `web/src/Player.tsx`        | Guide, authenticated media session, direct/HLS player, controls, audio/text subtitles and delivery events       |
-| `web/src/playback-utils.ts` | LAN-HTTP-compatible random event IDs and source-time WebVTT parsing                                             |
-| `web/src/styles.css`        | Shared approved colors/fonts/layout/focus, 1440/1024/390px behavior and reduced motion                          |
-| `web/vite.config.ts`        | Build output and optional development proxy                                                                     |
+| File                          | Responsibility                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `web/src/App.tsx`             | Cookie sign-in/session restore, role navigation, profile selection/PIN and workspace                                     |
+| `web/src/api.ts`              | Same-origin fetch, in-memory CSRF refresh/retry, structured API errors/session expiration                                |
+| `web/src/ui.tsx`              | Fields, asynchronous forms/actions, abortable reads, dialog focus, loading/error/empty states                            |
+| `web/src/Channels.tsx`        | Channel identity, group order/modes/selectors, commercial rules, preview/publish, archive/restore                        |
+| `web/src/Library.tsx`         | Artwork, show/season/folder/provider/saved selections, grid/list and collection references                               |
+| `web/src/Management.tsx`      | Accounts, profiles/grants/PIN, source scan/integration/refresh, subscriptions, generation, pairing and sessions          |
+| `web/src/SourceDirectory.tsx` | Searchable/paged scanned-subfolder choices for grants and generated-asset scope; manual fallback and source-change reset |
+| `web/src/Player.tsx`          | Guide, authenticated media session, direct/HLS player, controls, audio/text subtitles and delivery events                |
+| `web/src/playback-utils.ts`   | LAN-HTTP-compatible random event IDs and source-time WebVTT parsing                                                      |
+| `web/src/styles.css`          | Shared approved colors/fonts/layout/focus, 1440/1024/390px behavior and reduced motion                                   |
+| `web/vite.config.ts`          | Build output and optional development proxy                                                                              |
 
 The browser stores no bearer credential in localStorage. Its HttpOnly session cookie accompanies original/range, playlist, segment, artwork and subtitle requests. Mutations send CSRF. Each fetched view has loading/error/retry behavior. Dialogs use native modal semantics and restore prior focus. The narrow channel list uses cards; wide layouts use the management table plus preview panel. Artwork remains server-authorized dynamic content. Missing artwork has an explicit placeholder rather than showing unrelated media.
 

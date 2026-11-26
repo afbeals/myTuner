@@ -1,6 +1,6 @@
 # myTuner: standalone personal TV network
 
-Status: server/browser **0.2.1**, native TV client **0.2.0**, schema **16**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
+Status: server/browser **0.2.2**, native TV client **0.2.0**, schema **19**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
 
 The completed [tenth-round code review](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposition) fixed two P1 issues. The owner then selected R10-04–R10-13; those corrections are locally regression-verified. The owner subsequently selected R10-03 and the five older deferred findings; all six are corrected. [Differed](differed.md) tracks the external acceptance steps.
 
@@ -153,3 +153,13 @@ R9-01/R9-02/R9-04 are corrected locally: valid NFO number fallback, browser reta
 ## Current implementation status correction
 
 The earlier dated checkpoints preserve their historical scope. Expanded I47, the pilot-critical corrections and all six subsequently selected findings are implemented in 0.2.0 / schema 16. Browser verification and scoped native state/font/pairing checks pass; remaining emulator verification was stopped at the owner’s request. Follow [verification](VERIFICATION.md), [delivery phases](DELIVERY_PHASES.md) and [differed](differed.md) for open acceptance work.
+
+## Post-installation source and performance corrections — 0.2.2
+
+Source details can be edited and unused sources removed through admin controls. Directory/type changes reset catalog identity and source authority only when channel, collection, retained schedule and report references do not block them. Source media is never edited or removed. Saved integration keys are indicated without echoing credentials; mapping-only updates retain the stored key, while a changed provider destination requires an explicit key. Scan completion distinguishes success, incomplete inspection and failure. Profile grants use compact rows. Custom parent folders are selectable independently from one source.
+
+Browser library requests are bounded to 24 entries and use server-side search/source/type/page filtering. The final schema-19 production path reuses persisted compact rows maintained in bounded yielded batches, then performs authorized grouping/search in one read-only worker. Only selected media metadata is hydrated, and full raw provider JSON is not repeatedly materialized for the entire library. See [large-library behavior](LARGE_LIBRARY.md) for limits and first-run costs. Scan probes receive cancellation and shutdown stops refresh work before waiting for requests. Native remains 0.2.0. Actual Unraid stop/restart timing and the reported temporary statistics reset require target-host confirmation; other containers’ reported uptimes did not reset.
+
+## HDD efficiency and setup follow-up
+
+The owner requires responsive playback/UI and low interference with other Unraid workloads on spinning disks. N113/N114 now implement batched/paged reads, measured indexes, unchanged-scan write avoidance, shared optional background admission, selective revisions, mounted-directory suggestions, provider-root mapping selectors, saved-connection reuse and metadata/subtitle presets. N118–N120 add compact persisted indexing, a bounded read-only worker and explicit directory checks. [The performance plan](PERFORMANCE_PLAN.md) and [large-library behavior](LARGE_LIBRARY.md) record evidence, resource limits and future choices. These changes need no extra database service, Docker socket or host installation. Windows/Linux-image and controlled Unraid HDD/shared-RAM acceptance remain open; local tests cannot establish interference with other household applications.

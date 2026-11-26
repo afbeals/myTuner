@@ -4,7 +4,7 @@
 
 The server uses Node 24's built-in `DatabaseSync` against `mytuner.db` in `MYTUNER_DATA_DIR`. The database contains references, metadata and application state. It contains no original videos or encoded video blobs. Generated assets and caches are files outside media sources.
 
-`src/database.ts` is the authoritative schema. There are currently **sixteen append-only migrations**, tracked by SQLite `PRAGMA user_version`. This document describes their resulting schema. SQL names use snake_case; public HTTP JSON normally converts these to camelCase.
+`src/database.ts` is the authoritative schema. There are currently **nineteen append-only migrations**, tracked by SQLite `PRAGMA user_version`. This document describes their resulting schema. SQL names use snake_case; public HTTP JSON normally converts these to camelCase.
 
 Most entity IDs are UUID text. Authentication session identifiers are hashes, pairing identifiers are hashes, and provider IDs are source-scoped external text. Booleans are stored as integer 0/1. Time values are epoch milliseconds unless explicitly identified as a duration or relative source offset. `mtime_ms` retains the filesystem's numeric modification timestamp.
 
@@ -186,3 +186,23 @@ Migration 15 adds `sources.subtitle_root` (nullable canonical read-only path), `
 Migration16 adds `refresh_attempts` without changing earlier migrations. It imports known prior success/error evidence from integration and schedule rows. An untouched source has no attempt row and reports `never`; absence of a periodic schedule means manual checks only. Starting a scan/metadata refresh records `last_attempt_ms` and clears completion; completion records its outcome, preserving the most recent successful check when a later check fails. A start without completion is `incomplete` (in progress or interrupted), never a healthy result.
 
 Disabling the periodic schedule deletes only `refresh_sources`, preserving attempt diagnostics across restart. Replacing integration configuration clears the superseded attempt state; signature guards prevent old work from writing its result over the new configuration. Disconnecting an integration retains the latest diagnostic history until another source check records its outcome. Source deletion cascades diagnostics. Only the latest attempt/outcome is retained, not an unbounded event history. Backup/restore includes this table as part of SQLite. Schema16-to15 binary rollback requires restoring a compatible older backup; never decrement `user_version` manually.
+
+## Migration 17 and read performance
+
+Migration 17 adds `integration_metadata_media` on `integration_metadata(media_id)`. The existing primary key `(profile_id,source_id,subtree)` already covers profile/source grant lookup, so no redundant grant index is added. No media bytes are copied, and existing catalog IDs are retained. The current schema is 19; an older image will refuse this newer schema, so keep a compatible pre-upgrade application backup for image/database rollback.
+
+Migration 17 introduced batched provider lookup and a bounded in-memory aggregate cache. Migrations 18 and 19 replace global-write invalidation and the production raw aggregate path with explicit content revisions and the persisted compact worker model described below. The small synchronous reference/test path retains its bounded cache.
+
+## Migration 18: catalog revisions, provider roots and hot-path indexes
+
+`catalog_revision(id=1,revision)` records relevant catalog/access changes. Triggers cover INSERT/UPDATE/DELETE on media, sources, source grants, collections/items, display metadata, integration metadata/configuration and refresh-source state. Telemetry/session writes do not invalidate catalog caches. Rollback identity is included when validating in-memory revision state; a reused integer after rollback cannot return an uncommitted projection. Profile/PIN authority is still checked on each request.
+
+`provider_suggestions(connection_key,provider,url,roots_json,observed_ms,last_attempt_ms,last_error)` retains last-good observed roots and safe attempt/error status. Its private connection key is bound to provider, normalized full URL and credentials; it is not a browser credential. Source mappings and imports remain source-specific. Roots can include provider-inferred values and do not prove the existence of unused directories.
+
+New measured indexes are `schedule_by_revision_end(revision_id,end_ms)`, `media_available_title(available,title,id)`, and `playback_events_channel_account(channel_id,account_id)`. They target schedule coverage, raw media paging and account-specific channel statistics. They add write/storage cost deliberately; the grant primary key already covers profile/source lookups.
+
+## Compact persisted catalog — schema 19
+
+`catalog_projection_state` records the format, generation, durable backfill cursor, completion and published catalog revision. `catalog_projection_rows` stores compact per-media display/search/group fields, ordering and byte accounting; `catalog_projection_members` records folder/show/season/movie memberships. Coalesced `catalog_projection_dirty_media`, `catalog_projection_dirty_sources` and `catalog_projection_dirty_shows` queues track affected records and source expansion cursors, including deletions and display/provider changes. They contain no source-video copies.
+
+Only the main Store writes these tables. Preparation commits bounded batches and publishes a current revision only after backfill and dirty queues finish. The read-only worker checks publication/current revision in its SQLite snapshot. No per-account duplicate index is persisted: grants are applied before grouping/counts on reads. [Large-library behavior](LARGE_LIBRARY.md) covers cancellation, restart, limits and final-response authorization.

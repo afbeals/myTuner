@@ -579,3 +579,35 @@ test("preview rejects unrelated volumes and invalid ports before creating or mou
     false,
   );
 });
+
+test("optional Buildx cache settings preserve literal argument boundaries and never bypass candidate verification", async (t) => {
+  const root = await fixture(t),
+    calls: string[][] = [];
+  const cacheFrom = "type=local,src=/synthetic/cache with spaces",
+    cacheTo = "type=local,dest=/synthetic/next with spaces,mode=max";
+  await assert.rejects(
+    main("build", {
+      root,
+      cacheFrom,
+      cacheTo,
+      log: () => {},
+      run: async (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "image" && args[1] === "inspect")
+          throw Error("candidate verification reached");
+        return { stdout: "" };
+      },
+    }),
+    /candidate verification reached/,
+  );
+  const build = calls.find(
+    (args) => args[0] === "buildx" && args[1] === "build",
+  )!;
+  assert.equal(build[build.indexOf("--cache-from") + 1], cacheFrom);
+  assert.equal(build[build.indexOf("--cache-to") + 1], cacheTo);
+  assert.equal(build[build.indexOf("--platform") + 1], "linux/amd64");
+  assert.equal(
+    calls.some((args) => args[0] === "push"),
+    false,
+  );
+});
