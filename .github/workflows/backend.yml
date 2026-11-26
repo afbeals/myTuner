@@ -52,7 +52,6 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
       HOMEBREW_NO_AUTO_UPDATE: 1
       HOMEBREW_NO_INSTALL_CLEANUP: 1
     steps:
@@ -61,6 +60,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Configure browser cache directory
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/playwright-browsers" >> "$GITHUB_ENV"
       - run: command -v ffmpeg || brew install ffmpeg
       - run: npm ci
       - run: npm run build
