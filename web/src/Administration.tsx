@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ResetData } from "./ResetData";
 import type { Account } from "./types";
 import { api } from "./api";
 import { Field, Form, Load, Select, useRemote } from "./ui";
@@ -46,8 +47,8 @@ type Setup = {
   pairedDevices: number;
 };
 export function OperationsPage() {
-  const status = useRemote<Status>("/api/admin/status"),
-    setup = useRemote<Setup>("/api/admin/setup");
+  const status = useRemote<Status>("/api/admin/status", 0, true),
+    setup = useRemote<Setup>("/api/admin/setup", 0, true);
   const steps: [keyof Setup, string, string][] = [
     ["profiles", "Create a person or room profile", "profiles"],
     ["sources", "Add a read-only media source", "sources"],
@@ -57,6 +58,46 @@ export function OperationsPage() {
     ["subscriptions", "Subscribe the viewing profile", "subscriptions"],
     ["pairedDevices", "Connect and approve your TV", "connect-tv"],
   ];
+  const complete = Boolean(
+    setup.data && steps.every(([key]) => setup.data![key] > 0),
+  );
+  const attention = status.data
+    ? [
+        ...status.data.sources
+          .filter(
+            (source) =>
+              !source.readable ||
+              ["failed", "overdue", "incomplete"].includes(source.refreshState),
+          )
+          .map((source) => ({
+            text: `${source.name}: ${!source.readable ? "directory could not be read" : source.refreshState === "failed" ? "last scan failed" : source.refreshState === "overdue" ? "scheduled scan overdue" : "scan in progress or interrupted"}`,
+            href: "#sources",
+          })),
+        ...status.data.storage
+          .filter((storage) => storage.state !== "ok")
+          .map((storage) => ({
+            text: `${storage.kind === "generated" ? "Generated assets" : storage.kind === "cache" ? "Temporary playback storage" : storage.kind}: ${storage.state === "low" ? "low free space" : "free-space check unavailable"}`,
+            href: "#setup?topic=recovery",
+          })),
+        ...(status.data.backups.state !== "completed"
+          ? [
+              {
+                text:
+                  status.data.backups.state === "none"
+                    ? "No completed application backup found"
+                    : "Backup check unavailable",
+                href: "#setup?topic=recovery",
+              },
+            ]
+          : []),
+        ...status.data.schedules
+          .filter((channel) => channel.state !== "ready")
+          .map((channel) => ({
+            text: `${channel.name}: ${channel.state === "expired" ? "schedule coverage expired" : "programming has not been published"}`,
+            href: "#channels",
+          })),
+      ]
+    : [];
   return (
     <>
       <header className="page-head">
@@ -69,16 +110,47 @@ export function OperationsPage() {
         </div>
         <button
           className="secondary"
+          disabled={status.loading || setup.loading}
           onClick={() => {
             status.reload();
             setup.reload();
           }}
         >
-          Refresh overview
+          {status.loading || setup.loading ? "Refreshing…" : "Refresh overview"}
         </button>
       </header>
-      <section className="panel">
-        <h2>Get ready to watch</h2>
+      <section className="panel" aria-label="Needs attention">
+        <h2>Needs attention</h2>
+        {status.data ? (
+          attention.length ? (
+            <ul>
+              {attention.map((item, index) => (
+                <li key={index}>
+                  {item.text} · <a href={item.href}>Review</a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No problems were found in this application snapshot.</p>
+          )
+        ) : (
+          <p>Waiting for the first health snapshot.</p>
+        )}
+        {status.data && (status.loading || Boolean(status.error)) && (
+          <p role="status">
+            Showing the previous check from {when(status.data.checkedMs)}.{" "}
+            {status.loading
+              ? "Refreshing now…"
+              : "The latest refresh failed; retry to update it."}
+          </p>
+        )}
+      </section>
+      <details className="panel" open={!complete}>
+        <summary>
+          {complete
+            ? "Setup checklist · completed"
+            : "Get ready to watch · setup checklist"}
+        </summary>
         <p>
           Custom folders work on their own. Sonarr and Radarr are optional
           metadata integrations.
@@ -102,7 +174,7 @@ export function OperationsPage() {
           These are server-wide readiness counts. Check the intended profile’s
           access and subscriptions before watching.
         </p>
-      </section>
+      </details>
       <Load {...status} retry={status.reload} />
       {status.data && (
         <>
@@ -153,7 +225,18 @@ export function OperationsPage() {
               <p>Database: {status.data.database}</p>
               {status.data.storage.map((s) => (
                 <p key={s.kind}>
-                  {s.kind}: {s.state} · Free: {bytes(s.freeBytes)}
+                  {s.kind === "generated"
+                    ? "Generated assets"
+                    : s.kind === "cache"
+                      ? "Temporary playback storage"
+                      : s.kind}
+                  :{" "}
+                  {s.state === "ok"
+                    ? "Available"
+                    : s.state === "low"
+                      ? "Low free space"
+                      : "Check unavailable"}{" "}
+                  · Free: {bytes(s.freeBytes)}
                 </p>
               ))}
               <h3>Application backups</h3>
@@ -165,15 +248,23 @@ export function OperationsPage() {
                     : "Backup state unknown"}
               </p>
               <p>
-                Backups are operator-triggered with the backup CLI. Full bundles
-                include SQLite and its matching integration key. Originals and
-                derivatives are excluded. No recurring backup schedule is
-                configured by this application. Restore runs offline.
+                Backups are started by an operator. Restore requires the
+                application to be stopped.
               </p>
+              <details>
+                <summary>What backups include</summary>
+                <p>
+                  A complete bundle contains the database and its matching
+                  integration key. Original media and generated files are
+                  excluded. The application does not schedule recurring backups.
+                </p>
+              </details>
               {status.data.backups.truncated && (
                 <p>Only the newest 200 backup candidates were checked.</p>
               )}
-              <a href="#setup">Backup and recovery instructions</a>
+              <a href="#setup?topic=recovery">
+                Backup and recovery instructions
+              </a>
             </section>
           </div>
           <section className="panel">
@@ -199,6 +290,7 @@ export function OperationsPage() {
           </section>
         </>
       )}
+      <ResetData />
     </>
   );
 }
@@ -212,12 +304,19 @@ type Access = {
   grants: { sourceId: string; name: string; subtree: string }[];
   subscriptions: { id: string; name: string; mediaAllowed: boolean }[];
 };
-export function EffectiveAccess({ profileId }: { profileId: string }) {
+export function EffectiveAccess({
+  profileId,
+  version = 0,
+}: {
+  profileId: string;
+  version?: number;
+}) {
   const accounts = useRemote<Account[]>("/api/accounts"),
     [accountId, setAccountId] = useState("");
   const target = accountId || accounts.data?.[0]?.id;
   const access = useRemote<Access>(
     target ? `/api/admin/profiles/${profileId}/access/${target}` : null,
+    version,
   );
   return (
     <section className="panel">

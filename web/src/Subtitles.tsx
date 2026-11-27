@@ -1,7 +1,15 @@
 import { SourcePathField } from "./SourcePathField";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { ErrorBox, Field, Form, Load, Select, useRemote } from "./ui";
+import {
+  ErrorBox,
+  Field,
+  Form,
+  Load,
+  ModalFooterActions,
+  Select,
+  useRemote,
+} from "./ui";
 import { useDraftNavigation } from "./navigation";
 
 interface Settings {
@@ -78,6 +86,26 @@ export function SubtitleSettings({
     draft !== null &&
     (JSON.stringify(draft) !== baseline ||
       folders !== JSON.parse(baseline || "{}").subdirectories?.join(", "));
+  const savedSettings: Settings | null = baseline ? JSON.parse(baseline) : null;
+  const searchChanged = Boolean(
+    draft &&
+    savedSettings &&
+    JSON.stringify({
+      enabled: draft.enabled,
+      root: draft.root?.trim() || null,
+      subdirectories: folders
+        .split(",")
+        .map((folder) => folder.trim())
+        .filter(Boolean),
+      maxDepth: draft.maxDepth,
+    }) !==
+      JSON.stringify({
+        enabled: savedSettings.enabled,
+        root: savedSettings.root,
+        subdirectories: savedSettings.subdirectories,
+        maxDepth: savedSettings.maxDepth,
+      }),
+  );
   useDraftNavigation(
     dirty || busy,
     "Discard unsaved subtitle settings? A save received by the server may still finish.",
@@ -96,7 +124,9 @@ export function SubtitleSettings({
       <p>
         Find matching text captions beside videos, in subtitle folders or a
         separate read-only root. These settings are separate from NFO
-        information.
+        information. A separate root mirrors each video’s relative directory and
+        searches named subtitle folders there; arbitrary folders elsewhere in
+        the root are not searched.
       </p>
       <Load {...remote} retry={remote.reload} />
       {draft && (
@@ -135,6 +165,13 @@ export function SubtitleSettings({
             }
           }}
         >
+          {searchChanged && (
+            <p className="notice" role="status">
+              Saving changed search settings clears manual subtitle associations
+              for this source. Scan again, then review and reassociate custom
+              caption choices. Original caption files are kept.
+            </p>
+          )}
           <label className="check">
             <input
               type="checkbox"
@@ -327,7 +364,17 @@ export function SubtitlePanel({
             {info.tracks.map((track) => (
               <li key={track.index}>
                 <strong>{track.language ?? "Unknown language"}</strong> ·{" "}
-                {track.format} · {track.origin} · {track.status}
+                {track.format} · {track.origin} ·{" "}
+                {track.status === "missing"
+                  ? "Not found in latest search"
+                  : track.status}
+                {track.status === "missing" && (
+                  <p>
+                    The file may be outside the current subtitle search
+                    locations, moved, or removed. Review search settings and
+                    scan again before choosing another file.
+                  </p>
+                )}
                 {track.forced && " · Forced"}
                 {track.sdh && " · SDH"}
                 {track.relativePath && (
@@ -446,51 +493,61 @@ export function SubtitlePanel({
                   }
                   placeholder="Show/Season 1/Subs/English.srt"
                 />
-                <div className="actions">
-                  <button
-                    className="secondary"
-                    disabled={!manual.relativePath.trim()}
-                    onClick={() =>
-                      void request(
-                        "preview",
-                        { revision: info.revision, manual },
-                        (result) => setPreview(result as Preview),
-                      )
-                    }
+                <ModalFooterActions>
+                  <div
+                    className="actions"
+                    role="group"
+                    aria-label="Subtitle association actions"
                   >
-                    Check subtitle candidate
-                  </button>
-                  <button
-                    disabled={!preview?.supported}
-                    onClick={() =>
-                      void request(
-                        "check",
-                        {
-                          revision: info.revision,
-                          manual,
-                          fingerprint: preview?.fingerprint,
-                        },
-                        (result) => {
-                          setInfo(result as Info);
-                          setPreview(null);
-                          setManual({ rootKind: "media", relativePath: "" });
-                          setSaved(true);
-                        },
-                      )
-                    }
-                  >
-                    Save subtitle association
-                  </button>
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      setManual({ rootKind: "media", relativePath: "" });
-                      setPreview(null);
-                    }}
-                  >
-                    Cancel subtitle draft
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy || !manual.relativePath.trim()}
+                      onClick={() =>
+                        void request(
+                          "preview",
+                          { revision: info.revision, manual },
+                          (result) => setPreview(result as Preview),
+                        )
+                      }
+                    >
+                      Check subtitle candidate
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !preview?.supported}
+                      onClick={() =>
+                        void request(
+                          "check",
+                          {
+                            revision: info.revision,
+                            manual,
+                            fingerprint: preview?.fingerprint,
+                          },
+                          (result) => {
+                            setInfo(result as Info);
+                            setPreview(null);
+                            setManual({ rootKind: "media", relativePath: "" });
+                            setSaved(true);
+                          },
+                        )
+                      }
+                    >
+                      Save subtitle association
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setManual({ rootKind: "media", relativePath: "" });
+                        setPreview(null);
+                      }}
+                    >
+                      Cancel subtitle draft
+                    </button>
+                  </div>
+                </ModalFooterActions>
                 {preview && (
                   <p role="status">
                     Candidate: {preview.format} · {preview.size} bytes ·{" "}

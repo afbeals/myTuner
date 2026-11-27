@@ -1,3 +1,11 @@
+import {
+  captureStorageSafety,
+  combineStorageSafety,
+  parseStorageSafety,
+  preserveStorageSafety,
+  readOnlySourceRoots,
+  type StorageSafetySnapshot,
+} from "./storage-safety.js";
 import { applicationVersion } from "./version.js";
 import { backup, DatabaseSync } from "node:sqlite";
 import {
@@ -128,6 +136,74 @@ async function assertStandaloneBundle(directory: string) {
       throw error;
   }
 }
+type BackupManifest = {
+  format: 1;
+  schemaVersion: number;
+  keyIncluded: boolean;
+  resetBackup?: true;
+  fingerprint?: string;
+};
+async function readBackupManifest(directory: string): Promise<BackupManifest> {
+  const value: unknown = JSON.parse(
+    await readFile(join(directory, "manifest.json"), "utf8"),
+  );
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw Error("Invalid backup manifest");
+  const manifest = value as Record<string, unknown>;
+  if (
+    manifest.format !== 1 ||
+    !Number.isInteger(manifest.schemaVersion) ||
+    typeof manifest.keyIncluded !== "boolean"
+  )
+    throw Error(
+      "Invalid backup manifest format, schema version or key presence",
+    );
+  // Existing non-reset format-1 snapshots predate recorded fingerprints.
+  // A bundle claiming either reset field must satisfy the complete reset format.
+  if ("resetBackup" in manifest || "fingerprint" in manifest) {
+    const fields = [
+      "format",
+      "schemaVersion",
+      "keyIncluded",
+      "resetBackup",
+      "fingerprint",
+    ];
+    if (
+      manifest.resetBackup !== true ||
+      typeof manifest.fingerprint !== "string" ||
+      !/^[a-f0-9]{64}$/.test(manifest.fingerprint) ||
+      Object.keys(manifest).length !== fields.length ||
+      Object.keys(manifest).some((name) => !fields.includes(name))
+    )
+      throw Error("Invalid reset backup manifest or fingerprint");
+  }
+  return manifest as BackupManifest;
+}
+async function assertRecordedResetFingerprint(
+  directory: string,
+  manifest: BackupManifest,
+) {
+  if (!manifest.resetBackup) return;
+  await assertStandaloneBundle(directory);
+  const hash = createHash("sha256");
+  for (const name of ["mytuner.db", "integration.key"]) {
+    try {
+      for await (const bytes of createReadStream(join(directory, name)))
+        hash.update(bytes);
+    } catch (error) {
+      if (
+        name !== "integration.key" ||
+        manifest.keyIncluded ||
+        !(error instanceof Error && "code" in error && error.code === "ENOENT")
+      )
+        throw error;
+    }
+  }
+  if (hash.digest("hex") !== manifest.fingerprint)
+    throw Error(
+      "Reset backup fingerprint does not match its database and integration key",
+    );
+}
 async function assertRestoreStorage(root: string, directory: string) {
   await assertStandaloneBundle(directory);
   const target = await canonicalPath(root);
@@ -181,20 +257,78 @@ async function assertRestoreStorage(root: string, directory: string) {
     }
   }
 }
+const emptySafety = (): StorageSafetySnapshot => ({
+  cleanupDisabled: false,
+  outputWritesDisabled: false,
+  resetMs: null,
+  protectedRoots: [],
+});
+// A damaged application DB must remain recoverable without treating unknown
+// historical output/source boundaries as permission to write or reclaim files.
+async function currentStorageSafety(
+  root: string,
+): Promise<StorageSafetySnapshot> {
+  const path = join(root, "mytuner.db");
+  if (
+    !(await stat(path).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }))
+  )
+    return emptySafety();
+  let current: DatabaseSync | undefined;
+  try {
+    current = new DatabaseSync(path, { readOnly: true });
+    let damaged = false;
+    try {
+      verifyDatabase(current);
+    } catch (error) {
+      if (!databaseIsDamaged(error)) throw error;
+      damaged = true;
+    }
+    let state: StorageSafetySnapshot;
+    try {
+      state = captureStorageSafety({ db: current });
+    } catch {
+      return {
+        ...emptySafety(),
+        cleanupDisabled: true,
+        outputWritesDisabled: true,
+      };
+    }
+    return damaged
+      ? { ...state, cleanupDisabled: true, outputWritesDisabled: true }
+      : state;
+  } catch (error) {
+    if (!databaseIsDamaged(error)) throw error;
+    return {
+      ...emptySafety(),
+      cleanupDisabled: true,
+      outputWritesDisabled: true,
+    };
+  } finally {
+    current?.close();
+  }
+}
 async function installBundle(
   root: string,
   directory: string,
   validateOnly = false,
+  preserved?: StorageSafetySnapshot,
 ) {
   await assertStandaloneBundle(directory);
+  const safety = validateOnly
+    ? undefined
+    : combineStorageSafety(
+        preserved ?? emptySafety(),
+        await currentStorageSafety(root),
+      );
   const stage = join(root, `restore-${randomUUID()}.db`),
     target = join(root, "mytuner.db");
   let staged: Store | undefined;
   try {
-    const manifest = JSON.parse(
-      await readFile(join(directory, "manifest.json"), "utf8"),
-    );
-    if (manifest.format !== 1) throw Error("Unsupported backup format");
+    const manifest = await readBackupManifest(directory);
+    await assertRecordedResetFingerprint(directory, manifest);
     const input = new DatabaseSync(join(directory, "mytuner.db"), {
       readOnly: true,
     });
@@ -213,6 +347,9 @@ async function installBundle(
     await chmod(stage, 0o600);
     staged = new Store(stage);
     verifyDatabase(staged.db);
+    // Validate DB-only safety structure without probing any source mount during
+    // standalone backup verification.
+    readOnlySourceRoots(staged);
     const configs = staged.db
       .prepare("SELECT encrypted_key FROM integrations")
       .all();
@@ -241,6 +378,10 @@ async function installBundle(
         );
       }
     }
+    // Recheck the recorded source bytes after the asynchronous staging/key reads,
+    // before installing any staged records or changing a live key/database.
+    await assertRecordedResetFingerprint(directory, manifest);
+    if (safety) preserveStorageSafety(staged, safety);
     staged.db.exec(
       "DELETE FROM profile_unlocks; DELETE FROM sessions; DELETE FROM device_pairings; DELETE FROM playback_sessions; UPDATE generation_jobs SET status='queued' WHERE status='running'; UPDATE generation_items SET status='queued' WHERE status='running'; PRAGMA wal_checkpoint(TRUNCATE);",
     );
@@ -270,10 +411,9 @@ export async function restoreApplication(root: string, directory: string) {
   const release = await acquireDataLock(root);
   try {
     await assertNoPendingRestore(root);
-    const manifest = JSON.parse(
-      await readFile(join(directory, "manifest.json"), "utf8"),
-    );
-    if (manifest.format !== 1) throw Error("Unsupported backup format");
+    const storageSafety = await currentStorageSafety(root);
+    const manifest = await readBackupManifest(directory);
+    await assertRecordedResetFingerprint(directory, manifest);
     // Validate the input before taking a recovery snapshot or changing live files.
     const input = new DatabaseSync(join(directory, "mytuner.db"), {
       readOnly: true,
@@ -366,15 +506,20 @@ export async function restoreApplication(root: string, directory: string) {
     const journal = join(root, "restore.pending.json");
     await writeFile(
       journal,
-      JSON.stringify({ previous, quarantine, source: directory }),
+      JSON.stringify({
+        previous,
+        quarantine,
+        source: directory,
+        storageSafety,
+      }),
       { mode: 0o600 },
     );
     try {
-      await installBundle(root, directory);
+      await installBundle(root, directory, false, storageSafety);
       await rm(journal);
     } catch (error) {
       if (previous) {
-        await installBundle(root, previous);
+        await installBundle(root, previous, false, storageSafety);
         await rm(journal);
       }
       throw error;
@@ -418,12 +563,18 @@ export async function recoverInterruptedRestore(root: string) {
         throw changed();
       throw error;
     }
+    const storageSafety = combineStorageSafety(
+      await currentStorageSafety(root),
+      data.storageSafety === undefined
+        ? emptySafety()
+        : parseStorageSafety(data.storageSafety),
+    );
     if (
       typeof data.previous === "string" &&
       containsPath(join(root, "backups"), resolve(data.previous)) &&
       basename(data.previous).startsWith("snapshot-")
     ) {
-      await installBundle(root, data.previous);
+      await installBundle(root, data.previous, false, storageSafety);
     } else if (
       data.previous === null &&
       (data.quarantine === null ||
@@ -437,7 +588,7 @@ export async function recoverInterruptedRestore(root: string) {
         await readFile(join(data.source, "manifest.json"), "utf8"),
       );
       if (manifest.format !== 1) throw Error("Unsupported backup format");
-      await installBundle(root, data.source);
+      await installBundle(root, data.source, false, storageSafety);
     } else {
       throw Error(
         "No automatic rollback snapshot available; restore a known backup manually after inspecting the journal",
@@ -457,10 +608,8 @@ export async function verifyApplicationBackup(
   const scratch = await mkdtemp(join(tmpdir(), "mytuner-verify-"));
   try {
     signal?.throwIfAborted();
-    const manifest = JSON.parse(
-      await readFile(join(directory, "manifest.json"), "utf8"),
-    );
-    if (manifest.format !== 1) throw Error("Unsupported backup format");
+    const manifest = await readBackupManifest(directory);
+    await assertRecordedResetFingerprint(directory, manifest);
     const fingerprint = async () => {
       await assertStandaloneBundle(directory);
       const hash = createHash("sha256");

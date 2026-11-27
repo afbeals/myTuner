@@ -1,6 +1,6 @@
 # Browser and TV clients
 
-Server/browser version: **0.2.2**. Native Android/Fire OS client: **0.2.0**, version code 2; API compatibility remains version 1.
+Server/browser version: **0.3.0**, database schema **20**. Native Android/Fire OS client: **0.3.0**, version code 3; API compatibility remains version 1.
 
 ## Implemented surfaces
 
@@ -14,21 +14,21 @@ Channel setup asks for a full name and optional short name. Supplied short names
 
 ## Browser implementation
 
-| File                          | Responsibility                                                                                                           |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `web/src/App.tsx`             | Cookie sign-in/session restore, role navigation, profile selection/PIN and workspace                                     |
-| `web/src/api.ts`              | Same-origin fetch, in-memory CSRF refresh/retry, structured API errors/session expiration                                |
-| `web/src/ui.tsx`              | Fields, asynchronous forms/actions, abortable reads, dialog focus, loading/error/empty states                            |
-| `web/src/Channels.tsx`        | Channel identity, group order/modes/selectors, commercial rules, preview/publish, archive/restore                        |
-| `web/src/Library.tsx`         | Artwork, show/season/folder/provider/saved selections, grid/list and collection references                               |
-| `web/src/Management.tsx`      | Accounts, profiles/grants/PIN, source scan/integration/refresh, subscriptions, generation, pairing and sessions          |
-| `web/src/SourceDirectory.tsx` | Searchable/paged scanned-subfolder choices for grants and generated-asset scope; manual fallback and source-change reset |
-| `web/src/Player.tsx`          | Guide, authenticated media session, direct/HLS player, controls, audio/text subtitles and delivery events                |
-| `web/src/playback-utils.ts`   | LAN-HTTP-compatible random event IDs and source-time WebVTT parsing                                                      |
-| `web/src/styles.css`          | Shared approved colors/fonts/layout/focus, 1440/1024/390px behavior and reduced motion                                   |
-| `web/vite.config.ts`          | Build output and optional development proxy                                                                              |
+| File                          | Responsibility                                                                                                                          |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `web/src/App.tsx`             | Cookie sign-in/session restore, role navigation, profile selection/PIN and workspace                                                    |
+| `web/src/api.ts`              | Same-origin fetch, in-memory CSRF refresh/retry, structured API errors/session expiration                                               |
+| `web/src/ui.tsx`              | Fields, asynchronous forms/actions, abortable reads, dialog focus, loading/error/empty states                                           |
+| `web/src/Channels.tsx`        | Channel identity, group order/modes/selectors, commercial rules, preview/publish, archive/restore                                       |
+| `web/src/Library.tsx`         | Artwork, show/season/folder/provider/saved selections, grid/list and collection references                                              |
+| `web/src/Management.tsx`      | Lazy management-page entry points plus generation scope/jobs/cleanup; focused account/profile/source/session modules supply their pages |
+| `web/src/SourceDirectory.tsx` | Searchable/paged scanned-subfolder choices for grants and generated-asset scope; manual fallback and source-change reset                |
+| `web/src/Player.tsx`          | Guide, authenticated media session, direct/HLS player, controls, audio/text subtitles and delivery events                               |
+| `web/src/playback-utils.ts`   | LAN-HTTP-compatible random event IDs and source-time WebVTT parsing                                                                     |
+| `web/src/styles.css`          | Shared approved colors/fonts/layout/focus, 1440/1024/390px behavior and reduced motion                                                  |
+| `web/vite.config.ts`          | Build output and optional development proxy                                                                                             |
 
-The browser stores no bearer credential in localStorage. Its HttpOnly session cookie accompanies original/range, playlist, segment, artwork and subtitle requests. Mutations send CSRF. Each fetched view has loading/error/retry behavior. Dialogs use native modal semantics and restore prior focus. The narrow channel list uses cards; wide layouts use the management table plus preview panel. Artwork remains server-authorized dynamic content. Missing artwork has an explicit placeholder rather than showing unrelated media.
+The browser stores no bearer credential in localStorage. Its HttpOnly session cookie accompanies original/range, playlist, segment, artwork and subtitle requests. Mutations send CSRF. Each fetched view has loading/error/retry behavior. Dialogs use native modal semantics and restore prior focus. My Network uses horizontally scrollable channel cards with a focused preview/details view; the library follows below. Artwork remains server-authorized dynamic content. Missing artwork has an explicit placeholder rather than showing unrelated media.
 
 IBM Plex Sans and Space Mono are bundled locally through their licensed font packages. Hls.js is loaded only when compatible HLS playback is needed. The production CSP allows same-origin code/fonts/requests and required blob media/workers; it permits no third-party scripts or media origins. Browser hash navigation avoids an API-catching SPA fallback.
 
@@ -36,7 +36,7 @@ Development: run `npm run dev` for the server and `npm run dev:web` for Vite, or
 
 ## TV implementation
 
-The Android project is under `android/`, with application ID `tv.mytuner.app`, version name `0.2.0`, version code `2`, minimum SDK 23 and compile/target SDK 35. It is a universal managed-code APK: no application-specific native ABI libraries are packaged. Playback still depends on the TV’s platform decoders and operating system.
+The Android project is under `android/`, with application ID `tv.mytuner.app`, version name `0.3.0`, version code `3`, minimum SDK 23 and compile/target SDK 35. It is a universal managed-code APK: no application-specific native ABI libraries are packaged. Playback still depends on the TV’s platform decoders and operating system.
 
 | File                       | Responsibility                                                                                                                 |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -69,9 +69,9 @@ Browser: `npm run typecheck`, `npm run build`, `npm test`, `npm run test:smoke`,
 
 TV: with Java 17+ and an Android SDK, run `cd android` then `./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug`. The POC debug-signed artifact is `android/app/build/outputs/apk/debug/app-debug.apk`. Gradle/SDK/build caches, APKs and signing material are excluded from Git.
 
-For deterministic emulator recovery smoke, start `MYTUNER_E2E_PORT=8790 MYTUNER_E2E_LONG_EPISODES=1 npx tsx e2e/server.ts`, install the APK on an Android TV emulator and run `MYTUNER_TV_TEST_SERVER=http://127.0.0.1:8790 MYTUNER_ADB=/path/to/adb npm run test:tv`. The test uses a temporary loopback fault proxy on port 8789; keep it free. See [the client test commands](DEVELOPMENT.md#client-commands). The script intentionally refuses physical-device serials, drives remote keys, approves pairing in a real browser and captures screenshots under `test-results/tv/`. Its temporary server uses a synthetic account/PIN and is never a household deployment. Stop it afterward. Use [TV_INSTALLATION.md](TV_INSTALLATION.md) for physical installation, signing/update differences and Unraid connection instructions.
+For deterministic emulator recovery smoke, start `MYTUNER_E2E_PORT=8790 MYTUNER_E2E_LONG_EPISODES=1 node --import tsx e2e/server.ts`, install the APK on an Android TV emulator and run `MYTUNER_TV_TEST_SERVER=http://127.0.0.1:8790 MYTUNER_ADB=/path/to/adb npm run test:tv`. The test uses a temporary loopback fault proxy on port 8789; keep it free. See [the client test commands](DEVELOPMENT.md#client-commands). The script intentionally refuses physical-device serials, drives remote keys, approves pairing in a real browser and captures screenshots under `test-results/tv/`. Its temporary server uses a synthetic account/PIN and is never a household deployment. Stop it afterward. Use [TV_INSTALLATION.md](TV_INSTALLATION.md) for physical installation, signing/update differences and Unraid connection instructions.
 
-[Local acceptance](LOCAL_ACCEPTANCE.md) documents the browser recovery/editor matrix, text/focus checks, scoped native state/visual/font-scale checks and real mixed-format/two-viewer browser playback. Historical native tracks/TalkBack results are distinguished from the deferred final-APK repeats. Native runtime modes use separate fresh synthetic fixtures. CI defines backend, macOS Chromium visual/functional and Android build/unit/lint jobs; no remote CI run is claimed. Results and external gates belong in [verification](VERIFICATION.md), [the checklist](CHECKLIST.md) and [differed](differed.md).
+[Local acceptance](LOCAL_ACCEPTANCE.md) documents the browser recovery/editor matrix, text/focus checks, scoped native state/visual/font-scale checks and real mixed-format/two-viewer browser playback. Historical native tracks/TalkBack results are distinguished from the deferred final-APK repeats. Native runtime modes use separate fresh synthetic fixtures. CI defines release-version, backend, three macOS Chromium visual/functional shards with a required aggregate, Android build/unit/lint and Ubuntu Linux/amd64 Docker acceptance jobs. Docker acceptance builds/tests but does not publish or establish Windows/Unraid/device acceptance; no current remote CI result is claimed here. Follow [the local pre-push checks](DEVELOPMENT.md#local-checks-before-committing-and-pushing) using existing tooling without installing host software. Results and external gates belong in [verification](VERIFICATION.md), [the checklist](CHECKLIST.md) and [differed](differed.md).
 
 ## Selected improvement foundations and UI boundaries
 
@@ -98,3 +98,11 @@ The owner-selected R7-01–R7-04 are implemented locally. Collection inspector/d
 - Browser Problem reports is the admin inbox (acknowledge/delete); Your reports is account-scoped for other roles and rechecks current access. Reports expire by configured age and count caps.
 
 `web/src/Retained.tsx` contains these shared browser dialogs/inbox. Native `ProfileSelection.kt` owns one pending choice per profile screen; `UiTaskQueue.kt` skips obsolete pending UI work and gives startup/profile-select one process-owned serial lane across screen retries/Activity recreation; `MainActivity.kt` commits profile only after successful selection. Native dialogs use the existing Silver Signal controls and D-pad focus. Fresh launch/profile switching retains existing PIN requirements; no profile selection bypass or companion-controller policy is introduced. [TV installation](TV_INSTALLATION.md) still covers APK installation and connecting to Unraid.
+
+## Current UI composition — 0.3.0
+
+`Network.tsx` composes channel cards and library browsing in My Network; old Channels/Library routes remain valid. `ChannelWizard.tsx` owns the local four-step new-channel draft, explicit preview and atomic final request. `CatalogBrowser.tsx` supplies explicit folder/filename search and bounded mounted-page caching; `DirectoryTree.tsx` shares lazy direct-child selection across catalog/setup contexts. Exact-video tray choices remain in memory for the current library/profile context and are limited to 5,000 references. [My Network](MY_NETWORK.md) documents selection semantics and the difference between collections and dynamic groups.
+
+`Sources.tsx` separates source identity, configuration and scan dialogs. `SourceConfiguration.tsx`, `Profiles.tsx`, `Subscriptions.tsx` and `Accounts.tsx` stage settings with one footer save and revision-conflict handling. `SecretFields.tsx` confirms newly entered passwords/PINs without exposing saved secrets. Subscription dialogs live on profile cards and enforce the same private-channel rules as guides. `Info.tsx`, shared Modal/confirmation components and `Help.tsx` supply contextual help, stable dialog actions and version-bundled setup instructions. Help is available before login; referenced nonbundled documents open the project documentation separately.
+
+Watch TV keeps Pause/Resume, Go Live, volume/mute, embedded audio choices, supported captions and caption appearance controls. Its side-by-side desktop layout changes placement, not the playback contract. Browser/native pause presentation retains a frozen frame, program identity and frozen timing even with optional controls hidden. Physical remote/format acceptance and final current-build screenshots remain separate evidence gates; earlier native runtime checks are not a claim about a new APK.

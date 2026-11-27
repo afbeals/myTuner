@@ -1,3 +1,5 @@
+import { SourceInspectionNotice } from "./SourceInspectionNotice";
+import { confirmAction } from "./confirmation";
 import { SubtitlePanel } from "./Subtitles";
 import { useEffect, useState } from "react";
 import type { Selection, Track } from "./types";
@@ -41,12 +43,12 @@ export function VideoDetails({
 }) {
   const [copyMessage, setCopyMessage] = useState("");
   const [subtitleDirty, setSubtitleDirty] = useState(false);
-  const close = () => {
+  const close = async () => {
     if (
       !subtitleDirty ||
-      window.confirm(
+      (await confirmAction(
         "Discard this subtitle draft? A save received by the server may still finish.",
-      )
+      ))
     )
       onClose();
   };
@@ -54,7 +56,7 @@ export function VideoDetails({
     `/api/profiles/${profileId}/media/${mediaId}/details`,
   );
   return (
-    <Modal title="Video details" onClose={close}>
+    <Modal title="Video details" onClose={close} footerSlot>
       <Load {...detail} retry={detail.reload} />
       {detail.data && (
         <>
@@ -211,7 +213,35 @@ export function DeleteCollection({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null);
   return (
-    <Modal title="Delete collection" onClose={onClose}>
+    <Modal
+      title="Delete collection"
+      onClose={onClose}
+      closeDisabled={busy}
+      footer={
+        <div className="actions">
+          <button
+            className="danger"
+            disabled={busy || dependencies.loading || !dependencies.data}
+            onClick={async () => {
+              setBusy(true);
+              setError(null);
+              void api(
+                `/api/profiles/${profileId}/collections/${collectionId}`,
+                "DELETE",
+              )
+                .then(onDeleted)
+                .catch(setError)
+                .finally(() => setBusy(false));
+            }}
+          >
+            Delete saved collection
+          </button>
+          <button className="secondary" onClick={onClose} disabled={busy}>
+            Keep collection
+          </button>
+        </div>
+      }
+    >
       <p>
         Review where <strong>{collectionName}</strong> is used before deleting
         it. Original files stay in place.
@@ -271,34 +301,13 @@ export function DeleteCollection({
               Refresh impact
             </button>
           </div>
-          <div className="actions">
-            <button
-              className="danger"
-              disabled={busy || dependencies.loading}
-              onClick={() => {
-                setBusy(true);
-                setError(null);
-                void api(
-                  `/api/profiles/${profileId}/collections/${collectionId}`,
-                  "DELETE",
-                )
-                  .then(onDeleted)
-                  .catch(setError)
-                  .finally(() => setBusy(false));
-              }}
-            >
-              Delete saved collection
-            </button>
-            <button className="secondary" onClick={onClose} disabled={busy}>
-              Keep collection
-            </button>
-          </div>
         </>
       )}
     </Modal>
   );
 }
 interface Readiness {
+  sourceIds: string[];
   analyzed: number;
   truncated: boolean;
   counts: {
@@ -323,10 +332,14 @@ export function ReadinessPanel({
   profileId,
   selection,
   channelId,
+  identity = "session",
+  version = 0,
 }: {
   profileId: string;
   selection?: Selection;
   channelId?: string;
+  identity?: string;
+  version?: number;
 }) {
   const [preset, setPreset] = useState("compatible"),
     [attempt, setAttempt] = useState(0),
@@ -395,7 +408,7 @@ export function ReadinessPanel({
       <button
         className="secondary"
         disabled={loading}
-        onClick={() => {
+        onClick={async () => {
           setOffset(0);
           setAttempt((v) => v + 1);
         }}
@@ -419,6 +432,14 @@ export function ReadinessPanel({
             analyzed{result.truncated ? " (limited to first 5,000)" : ""}
           </p>
           <p className="notice">{result.note}</p>
+          {result.items.length > 0 && (result.sourceIds ?? []).length > 0 && (
+            <SourceInspectionNotice
+              profileId={profileId}
+              sourceIds={result.sourceIds}
+              identity={identity}
+              version={version}
+            />
+          )}
           {!result.analyzed && (
             <p>
               No available selected files or upcoming materialized intervals to

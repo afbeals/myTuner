@@ -119,12 +119,12 @@ export class PathResolver {
     authorize: () => void,
     signal?: AbortSignal,
   ): Promise<DirectoryCheck> {
-    authorize();
     invariant(
       !this.stopping.signal.aborted,
       503,
       "Directory checks are stopping",
     );
+    authorize();
     invariant(
       !this.active,
       429,
@@ -164,9 +164,10 @@ export class PathResolver {
           timer.unref();
         }),
       ]);
-      authorize();
+      // Shutdown/disconnect must be checked before authority touches SQLite.
       signal?.throwIfAborted();
       this.stopping.signal.throwIfAborted();
+      authorize();
       return response;
     } finally {
       clearTimeout(timer);
@@ -182,6 +183,7 @@ export class PathResolver {
       signal.throwIfAborted();
       authorize();
     };
+    signal.throwIfAborted();
     const source = input.sourceId
       ? sourceById(this.store, input.sourceId)
       : undefined;
@@ -399,8 +401,20 @@ export class PathResolver {
       return result;
     }
   }
-  async stop() {
+  async stop(milliseconds = 2000) {
     this.stopping.abort();
-    await this.active?.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Filesystem syscalls cannot be cancelled. Late work retains admission and
+    // checks the stop signal before any further authorization/database access.
+    try {
+      await Promise.race([
+        this.active?.catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, milliseconds);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import {
@@ -371,9 +372,9 @@ export function MetadataIntegration({
         className="secondary danger"
         onClick={async () => {
           if (
-            !window.confirm(
+            !(await confirmAction(
               "Remove this metadata integration? Imported metadata will remain.",
-            )
+            ))
           )
             return;
           try {
@@ -438,7 +439,7 @@ function MappingChooser({
         type="button"
         className="secondary"
         disabled={!from.trim() || !to.trim()}
-        onClick={() => {
+        onClick={async () => {
           onAdd();
           markDirty();
         }}

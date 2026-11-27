@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { openProgrammingDraft, selectInitialProfile } from "./workspace";
 import { test, expect, type Page, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
@@ -10,6 +12,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -71,23 +74,39 @@ async function focusWrap(page: Page, modal: Locator) {
   await page.keyboard.press("Tab");
   await expect(close).toBeFocused();
 }
+async function confirmation(page: Page, accept: boolean) {
+  const dialog = page.locator("dialog.confirmation-dialog");
+  await expect(dialog).toBeVisible();
+  const message = await dialog.locator(".dialog-body").innerText();
+  await dialog
+    .getByRole("button", {
+      name: accept ? /^(Discard changes|Continue)$/ : "Cancel",
+      exact: !accept,
+    })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  return message;
+}
 async function programming(page: Page, name: string) {
   await login(page);
-  await page
-    .getByRole("button", { name: "+ Create channel", exact: true })
-    .click();
-  await page.getByLabel("Channel name", { exact: true }).fill(name);
-  await page
-    .getByRole("button", { name: "Create & program", exact: true })
-    .click();
-  const editor = page.getByRole("dialog", {
-    name: `Program ${name}`,
-    exact: true,
-  });
+  const editor = await openProgrammingDraft(page, name);
   await expect(
-    editor.getByRole("button", { name: "Add content group" }),
+    editor.getByRole("button", { name: "+ Add content group", exact: true }),
   ).toBeVisible();
   return editor;
+}
+async function selectShow(page: Page) {
+  const picker = page.getByRole("dialog", {
+    name: "Choose programming content",
+    exact: true,
+  });
+  await picker
+    .getByRole("button", { name: "Select Orbit Patrol", exact: true })
+    .click();
+  await picker
+    .getByRole("button", { name: "Use selection", exact: true })
+    .click();
+  await expect(picker).toHaveCount(0);
 }
 
 for (const action of ["escape", "close", "cancel", "navigate"] as const) {
@@ -119,12 +138,6 @@ for (const action of ["escape", "close", "cancel", "navigate"] as const) {
         writes++;
     });
     const confirmationMessages: string[] = [];
-    page.on("dialog", async (d) => {
-      confirmations++;
-      confirmationMessages.push(d.message());
-      if (accept) await d.accept();
-      else await d.dismiss();
-    });
     const dismiss = async () => {
       if (action === "escape") await page.keyboard.press("Escape");
       else if (action === "navigate")
@@ -138,6 +151,8 @@ for (const action of ["escape", "close", "cancel", "navigate"] as const) {
             exact: true,
           })
           .click();
+      confirmationMessages.push(await confirmation(page, accept));
+      confirmations++;
     };
     await dismiss();
     await expect(modal).toBeVisible();
@@ -151,7 +166,9 @@ for (const action of ["escape", "close", "cancel", "navigate"] as const) {
     await expect(modal).toHaveCount(0);
     expect(confirmations).toBe(2);
     expect(
-      confirmationMessages.every((message) => message.includes("collection")),
+      confirmationMessages.every((message) =>
+        /unsaved|unpublished|discard/i.test(message),
+      ),
     ).toBe(true);
     expect(writes).toBe(0);
     if (action === "navigate")
@@ -162,7 +179,7 @@ for (const action of ["escape", "close", "cancel", "navigate"] as const) {
   });
 }
 
-test("cancelled subtitle settings restore the baseline and close without a phantom discard prompt", async ({
+test("cancelled atomic source settings retain all fields when rejected and reopen the saved baseline after discard", async ({
   page,
 }) => {
   await login(page);
@@ -176,35 +193,38 @@ test("cancelled subtitle settings restore the baseline and close without a phant
     name: "Configure TV shows",
     exact: true,
   });
-  const settings = modal.getByRole("region", {
-    name: "Subtitle search settings",
-    exact: true,
-  });
-  const folders = settings.getByLabel("Subtitle subdirectories", {
-    exact: true,
-  });
+  const folders = modal.getByLabel("Subtitle folder names", { exact: true });
   await expect(folders).toBeEnabled();
   const baseline = await folders.inputValue();
-  await folders.fill("Draft/Captions, Draft/English");
-  let confirmations = 0,
-    writes = 0;
-  page.on("request", (r) => {
-    if (r.method() === "PUT" && r.url().endsWith("/subtitles")) writes++;
+  const metadata = modal.getByLabel("Separate metadata directory (optional)", {
+    exact: true,
   });
-  page.on("dialog", async (d) => {
-    confirmations++;
-    await d.dismiss();
+  const originalMetadata = await metadata.inputValue();
+  await folders.fill("DraftCaptions, DraftEnglish");
+  await metadata.fill("/synthetic/unsaved-metadata");
+  let writes = 0;
+  page.on("request", (request) => {
+    if (request.method() === "PUT" && request.url().endsWith("/configuration"))
+      writes++;
   });
   await page.keyboard.press("Escape");
+  await confirmation(page, false);
   await expect(modal).toBeVisible();
-  expect(confirmations).toBe(1);
-  await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(folders).toHaveValue("DraftCaptions, DraftEnglish");
+  await expect(metadata).toHaveValue("/synthetic/unsaved-metadata");
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await confirmation(page, true);
+  await expect(modal).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  expect(writes).toBe(0);
+  await opener.click();
   await expect(folders).toHaveValue(baseline);
+  await expect(metadata).toHaveValue(originalMetadata);
   await modal
     .getByRole("button", { name: "Close dialog", exact: true })
     .click();
   await expect(modal).toHaveCount(0);
-  expect(confirmations).toBe(1);
+  await expect(page.locator("dialog.confirmation-dialog")).toHaveCount(0);
   expect(writes).toBe(0);
   await expect(opener).toBeFocused();
 });
@@ -221,7 +241,11 @@ test("collection lookup and media errors recover without blank editing or lost s
   const collection = await mutate(
     page,
     `/api/profiles/${profileId}/collections`,
-    { name: "Editor recovery collection", mediaIds: [media[0].id] },
+    {
+      creationId: randomUUID(),
+      name: "Editor recovery collection",
+      mediaIds: [media[0].id],
+    },
   );
   await page.goto(`/#library?profile=${profileId}&collection=${collection.id}`);
   let collectionWrites = 0;
@@ -237,21 +261,24 @@ test("collection lookup and media errors recover without blank editing or lost s
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  await page.route(`**/collections/${collection.id}`, async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    if (phase === "held") await gate;
-    if (phase === "unavailable" || phase === "forbidden")
-      return route.fulfill({
-        status: phase === "forbidden" ? 403 : 503,
-        json: {
-          error:
-            phase === "forbidden"
-              ? "Collection access changed."
-              : "Collection lookup unavailable.",
-        },
-      });
-    return route.continue();
-  });
+  await page.route(
+    `**/collections/${collection.id}/membership`,
+    async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      if (phase === "held") await gate;
+      if (phase === "unavailable" || phase === "forbidden")
+        return route.fulfill({
+          status: phase === "forbidden" ? 403 : 503,
+          json: {
+            error:
+              phase === "forbidden"
+                ? "Collection access changed."
+                : "Collection lookup unavailable.",
+          },
+        });
+      return route.continue();
+    },
+  );
   try {
     await page
       .getByRole("button", { name: "Edit collection", exact: true })
@@ -260,10 +287,12 @@ test("collection lookup and media errors recover without blank editing or lost s
       name: "Edit collection",
       exact: true,
     });
-    await expect(modal.getByRole("status")).toContainText("Loading");
+    await expect(
+      modal.getByRole("status").filter({ hasText: /^Loading/ }),
+    ).toContainText("Loading");
     await expect(
       modal.getByRole("button", { name: "Save collection", exact: true }),
-    ).toHaveCount(0);
+    ).toBeDisabled();
     phase = "unavailable";
     release();
     await expect(modal.getByRole("alert")).toContainText("lookup unavailable");
@@ -275,7 +304,7 @@ test("collection lookup and media errors recover without blank editing or lost s
     await expect(modal.getByRole("alert")).toContainText("access changed");
     await expect(
       modal.getByRole("button", { name: "Save collection", exact: true }),
-    ).toHaveCount(0);
+    ).toBeDisabled();
     phase = "normal";
     await modal.getByRole("button", { name: "Try again", exact: true }).click();
     await expect(
@@ -296,16 +325,19 @@ test("collection lookup and media errors recover without blank editing or lost s
     await modal
       .getByLabel("Find videos", { exact: true })
       .fill("missing-video");
+    await modal
+      .getByRole("button", { name: "Search videos", exact: true })
+      .click();
     await expect(modal.getByRole("alert")).toContainText(
       "Video lookup unavailable",
     );
     await expect(
       modal.getByRole("region", { name: "Selected videos" }),
-    ).toContainText("1 selected videos");
+    ).toContainText("1 selected video");
     mediaPhase = "empty";
     await modal.getByRole("button", { name: "Try again", exact: true }).click();
     await expect(modal).toContainText(
-      "No matching videos. Your selected references are preserved.",
+      "No matching videos. Selected references are kept.",
     );
     await expect(
       modal.getByLabel("Collection name", { exact: true }),
@@ -313,10 +345,10 @@ test("collection lookup and media errors recover without blank editing or lost s
     expect(collectionWrites).toBe(0);
     await focusWrap(page, modal);
     await accessible(page);
-    page.once("dialog", (d) => d.accept());
     await modal
       .getByRole("button", { name: "Close dialog", exact: true })
       .click();
+    await confirmation(page, true);
     await expect(modal).toHaveCount(0);
   } finally {
     release();
@@ -327,11 +359,10 @@ test("programming picker loading, unavailable, forbidden and empty states preser
   page,
 }) => {
   const editor = await programming(page, "Picker state acceptance");
-  await editor.getByRole("button", { name: "Add content group" }).click();
-  await page
-    .getByRole("dialog", { name: "Choose programming content", exact: true })
-    .getByRole("button", { name: "Select Orbit Patrol", exact: true })
+  await editor
+    .getByRole("button", { name: "+ Add content group", exact: true })
     .click();
+  await selectShow(page);
   await expect(editor).toContainText("Unsaved draft");
   let phase = "held",
     release!: () => void;
@@ -366,7 +397,9 @@ test("programming picker loading, unavailable, forbidden and empty states preser
       name: "Choose programming content",
       exact: true,
     });
-    await expect(modal.getByRole("status")).toContainText("Loading");
+    await expect(
+      modal.getByRole("status").filter({ hasText: /^Loading/ }),
+    ).toContainText("Loading");
     phase = "unavailable";
     release();
     await expect(modal.getByRole("alert")).toContainText("options unavailable");
@@ -376,7 +409,7 @@ test("programming picker loading, unavailable, forbidden and empty states preser
     await modal.getByRole("button", { name: "Try again", exact: true }).focus();
     await page.keyboard.press("End");
     await expect(
-      modal.getByRole("button", { name: "Next results", exact: true }),
+      modal.getByRole("button", { name: "Cancel", exact: true }),
     ).toBeInViewport({ ratio: 1 });
     phase = "forbidden";
     await modal.getByRole("button", { name: "Try again", exact: true }).click();
@@ -400,15 +433,13 @@ test("programming picker loading, unavailable, forbidden and empty states preser
     await modal
       .getByRole("combobox", { name: "Programming type" })
       .selectOption("show");
-    await modal
-      .getByRole("button", { name: "Select Orbit Patrol", exact: true })
-      .click();
+    await selectShow(page);
     await expect(modal).toHaveCount(0);
     await expect(editor).toContainText("Content group 1");
-    page.once("dialog", (d) => d.accept());
     await editor
       .getByRole("button", { name: "Close dialog", exact: true })
       .click();
+    await confirmation(page, true);
   } finally {
     release();
   }
@@ -418,21 +449,22 @@ test("next-episode lookup recovers from loading, offline, forbidden and empty wi
   page,
 }) => {
   const editor = await programming(page, "Checkpoint state acceptance");
-  await editor.getByRole("button", { name: "Add content group" }).click();
-  await page
-    .getByRole("dialog", { name: "Choose programming content", exact: true })
-    .getByRole("button", { name: "Select Orbit Patrol", exact: true })
+  await editor
+    .getByRole("button", { name: "+ Add content group", exact: true })
     .click();
-  page.once("dialog", (d) => d.accept());
+  await selectShow(page);
   await editor
     .getByRole("button", { name: "Restart group", exact: true })
     .click();
+  await confirmation(page, true);
+  let requests = 0;
   let phase = "held",
     release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
   await page.route("**/api/profiles/*/checkpoint-options", async (route) => {
+    requests++;
     if (phase === "held") await gate;
     if (phase === "offline") return route.abort("failed");
     if (phase === "forbidden")
@@ -445,15 +477,17 @@ test("next-episode lookup recovers from loading, offline, forbidden and empty wi
   });
   try {
     const opener = editor.getByRole("button", {
-      name: "Choose next episode",
+      name: "Choose next video",
       exact: true,
     });
     await opener.click();
     const modal = page.getByRole("dialog", {
-      name: "Choose the next episode",
+      name: "Choose the next video",
       exact: true,
     });
-    await expect(modal.getByRole("status")).toContainText("Loading");
+    await expect(
+      modal.getByRole("status").filter({ hasText: /^Loading/ }),
+    ).toContainText("Loading");
     phase = "offline";
     release();
     await expect(modal.getByRole("alert")).toContainText(
@@ -481,12 +515,50 @@ test("next-episode lookup recovers from loading, offline, forbidden and empty wi
     await expect(
       modal.getByRole("button", { name: /S1 E[12]/ }).first(),
     ).toBeVisible();
+    const beforeTyping = requests;
+    const search = modal.getByLabel("Find next video", { exact: true });
+    await search.fill("Maple");
+    // The former debounce fetched after 200 ms. Draft input must stay local.
+    await page.waitForTimeout(350);
+    expect(requests).toBe(beforeTyping);
+    await expect(
+      modal.getByRole("button", { name: /The Last Platform · S1 E1/ }),
+    ).toBeVisible();
+    const submitted = page.waitForRequest(
+      (request) =>
+        request.url().endsWith("/checkpoint-options") &&
+        request.postDataJSON().search === "Maple",
+    );
+    await modal.getByRole("button", { name: "Search", exact: true }).click();
+    expect((await submitted).postDataJSON().search).toBe("Maple");
+    await expect(
+      modal.getByRole("button", { name: /Maple Street · S1 E2/ }),
+    ).toBeVisible();
+    await expect(
+      modal.getByRole("button", { name: /The Last Platform · S1 E1/ }),
+    ).toHaveCount(0);
+    expect(requests).toBe(beforeTyping + 1);
+    const entered = page.waitForRequest(
+      (request) =>
+        request.url().endsWith("/checkpoint-options") &&
+        request.postDataJSON().search === "Last",
+    );
+    await search.fill("Last");
+    await search.press("Enter");
+    expect((await entered).postDataJSON().search).toBe("Last");
+    await expect(
+      modal.getByRole("button", { name: /The Last Platform · S1 E1/ }),
+    ).toBeVisible();
+    await expect(
+      modal.getByRole("button", { name: /Maple Street · S1 E2/ }),
+    ).toHaveCount(0);
+    expect(requests).toBe(beforeTyping + 2);
     await page.keyboard.press("Escape");
     await expect(editor).toContainText("Draft: restart this group");
-    page.once("dialog", (d) => d.accept());
     await editor
       .getByRole("button", { name: "Close dialog", exact: true })
       .click();
+    await confirmation(page, true);
   } finally {
     release();
   }

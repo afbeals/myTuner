@@ -9,3 +9,10 @@
 
 !web/
 !web/**
+
+# Curated guides are compiled into the lazy-loaded Help bundle.
+!docs/
+!docs/UNRAID_DOCKER_TAB.md
+!docs/TV_INSTALLATION.md
+!docs/OPERATIONS.md
+!docs/WINDOWS_DOCKER.md

@@ -1,4 +1,17 @@
 import test from "node:test";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  rename,
+  realpath,
+  rm,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { addSource, scanSource } from "../src/catalog.js";
+import { DomainError } from "../src/domain.js";
 import assert from "node:assert/strict";
 import { Store } from "../src/database.js";
 import { ProgrammingService } from "../src/programming.js";
@@ -833,5 +846,122 @@ test("episodes per turn is optional and survives schedule chunks and publication
   assert.deepEqual(
     preview.entries.map((e) => e.mediaId),
     published.entries.map((e) => e.mediaId),
+  );
+});
+
+test("renamed-folder preview identifies the empty group and recovery while a healthy companion group still plays", async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "mytuner-renamed-programming-")),
+  );
+  const store = new Store(":memory:");
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const mediaRoot = join(root, "media");
+  await mkdir(join(mediaRoot, "Bonus"), { recursive: true });
+  await writeFile(
+    join(mediaRoot, "Bonus", "one.mp4"),
+    "synthetic original bytes",
+  );
+  const src = await addSource(
+    store,
+    {
+      name: "Private source label",
+      root: mediaRoot,
+      kind: "videos",
+      recursive: true,
+    },
+    [],
+  );
+  const owner = account(store),
+    p = profile(store, owner),
+    ch = channel(store, owner);
+  store.db
+    .prepare(
+      "INSERT INTO source_grants(profile_id,source_id,subtree) VALUES(?,?,'')",
+    )
+    .run(p, src.id);
+  await scanSource(store, src, async () => 1000);
+  const original = String(store.db.prepare("SELECT id FROM media").get()!.id);
+  const service = new ProgrammingService(store, 3000);
+  const config: Programming = {
+    profileId: p,
+    groups: [
+      {
+        id: "bonus",
+        mode: "ordered",
+        selection: {
+          type: "folder",
+          sourceId: src.id,
+          directory: "Bonus",
+          recursive: true,
+        },
+      },
+    ],
+    rules: noBreaks,
+    seed: 42,
+  };
+  assert.deepEqual(
+    new Set(
+      service
+        .preview(owner, ch.id, config, 0, 3000)
+        .entries.map((entry) => entry.mediaId),
+    ),
+    new Set([original]),
+  );
+  await rename(join(mediaRoot, "Bonus"), join(mediaRoot, "Bonus-renamed"));
+  await scanSource(store, src, async () => 1000);
+  assert.equal(
+    store.db.prepare("SELECT available FROM media WHERE id=?").get(original)!
+      .available,
+    0,
+  );
+  const replacement = String(
+    store.db.prepare("SELECT id FROM media WHERE available=1").get()!.id,
+  );
+  assert.throws(
+    () => service.preview(owner, ch.id, config, 0, 3000),
+    (error: unknown) => {
+      assert.ok(error instanceof DomainError);
+      assert.equal(error.statusCode, 409);
+      assert.match(
+        error.message,
+        /^No available programming; content group 1, folder "Bonus",/,
+      );
+      assert.match(error.message, /Scan the source/);
+      assert.match(error.message, /replacement folder.*moved or was renamed/);
+      assert.doesNotMatch(error.message, /Private source label/);
+      assert.equal(error.message.includes(mediaRoot), false);
+      return true;
+    },
+  );
+  const partial: Programming = {
+    ...config,
+    groups: [
+      ...config.groups,
+      {
+        id: "renamed",
+        mode: "ordered",
+        selection: {
+          type: "folder",
+          sourceId: src.id,
+          directory: "Bonus-renamed",
+          recursive: true,
+        },
+      },
+    ],
+  };
+  const available = service.preview(owner, ch.id, partial, 0, 3000);
+  assert.ok(available.entries.length > 0);
+  assert.deepEqual(
+    new Set(available.entries.map((entry) => entry.mediaId)),
+    new Set([replacement]),
+  );
+  assert.equal(
+    await (
+      await import("node:fs/promises")
+    ).readFile(join(mediaRoot, "Bonus-renamed", "one.mp4"), "utf8"),
+    "synthetic original bytes",
   );
 });

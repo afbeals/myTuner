@@ -34,7 +34,8 @@ const candidate = { imageId, version: "0.2.0", platform: "linux/amd64" };
 async function fixture(t: { after: (f: () => Promise<void>) => void }) {
   const root = await mkdtemp(join(tmpdir(), "mytuner docker spaces "));
   t.after(() => rm(root, { recursive: true, force: true }));
-  for (const dir of ["src", "web", "scripts"]) await mkdir(join(root, dir));
+  for (const dir of ["src", "web", "scripts", "docs"])
+    await mkdir(join(root, dir));
   for (const name of [
     ".dockerignore",
     "Dockerfile",
@@ -47,6 +48,10 @@ async function fixture(t: { after: (f: () => Promise<void>) => void }) {
     "scripts/docker-acceptance.mjs",
     "scripts/container-fixture.mjs",
     "scripts/docker-preview.mjs",
+    "docs/UNRAID_DOCKER_TAB.md",
+    "docs/TV_INSTALLATION.md",
+    "docs/OPERATIONS.md",
+    "docs/WINDOWS_DOCKER.md",
   ])
     await writeFile(join(root, name), name);
   await writeFile(
@@ -239,6 +244,77 @@ test("image promotion refuses untested, changed-source and stale-latest images b
   assert.deepEqual(calls.at(-1), ["tag", imageId, "afbeals/mytuner:latest"]);
   await writeFile(join(root, "src/server.ts"), "changed");
   await assert.rejects(main("tag", { root, run }), /changed/);
+});
+test("bundled Help changes invalidate image publication while unrelated research stays outside acceptance", async (t) => {
+  for (const guide of [
+    "UNRAID_DOCKER_TAB.md",
+    "TV_INSTALLATION.md",
+    "OPERATIONS.md",
+    "WINDOWS_DOCKER.md",
+  ]) {
+    await t.test(guide, async (t) => {
+      const root = await fixture(t);
+      const calls: string[][] = [];
+      const acceptedDigest = await sourceDigest(root);
+      let imageDigest = acceptedDigest;
+      const run = async (args: string[]) => {
+        calls.push(args);
+        if (args[0] === "version")
+          return { code: 0, stdout: JSON.stringify({ Version: "synthetic" }) };
+        if (args[0] === "compose")
+          return { code: 0, stdout: "synthetic-compose" };
+        if (args[0] === "image")
+          return {
+            code: 0,
+            stdout: JSON.stringify([
+              {
+                ...inspected,
+                Config: {
+                  ...inspected.Config,
+                  Labels: {
+                    ...inspected.Config.Labels,
+                    "tv.mytuner.source-digest": imageDigest,
+                  },
+                },
+              },
+            ]),
+          };
+        return { code: 0, stdout: "", stderr: "" };
+      };
+      const options = { root, run, log: () => {}, accept: async () => {} };
+      await main("test", options);
+      const acceptedPath = join(root, "artifacts/docker/accepted.json");
+      const accepted = JSON.parse(await readFile(acceptedPath, "utf8"));
+      assert.equal(accepted.status, "passed");
+      assert.equal(accepted.sourceDigest, acceptedDigest);
+
+      await writeFile(join(root, "docs/research.md"), "Unbundled research");
+      assert.equal(await sourceDigest(root), acceptedDigest);
+      await main("tag", options);
+      await main("push", options);
+      assert.equal(calls.filter((args) => args[0] === "tag").length, 1);
+      assert.equal(calls.filter((args) => args[0] === "push").length, 2);
+
+      calls.length = 0;
+      await writeFile(join(root, "docs", guide), "Updated bundled Help");
+      const changedDigest = await sourceDigest(root);
+      assert.notEqual(changedDigest, acceptedDigest);
+      for (const command of ["tag", "push"])
+        await assert.rejects(main(command, options), /different source/);
+
+      imageDigest = changedDigest;
+      for (const command of ["tag", "push"])
+        await assert.rejects(main(command, options), /acceptance/);
+      assert.equal(
+        calls.some((args) => ["tag", "push"].includes(args[0]!)),
+        false,
+      );
+      assert.deepEqual(
+        JSON.parse(await readFile(acceptedPath, "utf8")),
+        accepted,
+      );
+    });
+  }
 });
 test("build uses amd64 and package version and invalidates prior acceptance even on failure", async (t) => {
   const root = await fixture(t);

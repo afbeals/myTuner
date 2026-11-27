@@ -37,7 +37,12 @@ export function publicJson(
       : mediaId;
   const result: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(row)) {
-    if (["password_hash", "encrypted_key", "csrf_hash"].includes(key)) continue;
+    if (
+      ["password_hash", "encrypted_key", "csrf_hash", "creation_hash"].includes(
+        key,
+      )
+    )
+      continue;
     const name =
       key === "metadata_json"
         ? "metadata"
@@ -63,6 +68,7 @@ export function publicJson(
         "recursive",
         "canManage",
         "pinProtected",
+        "hasProgramming",
         "regenerate",
       ].includes(name) ||
         (name === "available" && row.metadata_json !== undefined))

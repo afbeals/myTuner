@@ -94,6 +94,13 @@ export function playbackReadiness(
     },
     offset: input.offset,
     limit: input.limit,
+    sourceIds: [
+      ...new Set(
+        items
+          .slice(input.offset, input.offset + input.limit)
+          .map(({ item }) => item.source_id),
+      ),
+    ].slice(0, 100),
     items: analyzed.slice(input.offset, input.offset + input.limit),
     note: "Predicted routing from stored metadata and declared capabilities. This does not certify codec profiles, bitrate, HDR, firmware or a physical TV. No scan, session, conversion or generation was started.",
   };

@@ -1,6 +1,6 @@
 {
   "name": "mytuner",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -38,7 +38,9 @@
     "docker:preview": "node scripts/docker.mjs preview",
     "docker:check": "node scripts/docker.mjs check",
     "docker:help": "node scripts/docker.mjs --help",
-    "test:catalog": "npm run build:server && node --expose-gc scripts/catalog-smoke.mjs --large"
+    "test:catalog": "npm run build:server && node --expose-gc scripts/catalog-smoke.mjs --large",
+    "db:reset": "tsx src/reset-cli.ts",
+    "test:reset-lifecycle": "tsx --test test/reset-browser-lifecycle.check.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.10",

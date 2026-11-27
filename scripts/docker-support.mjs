@@ -146,6 +146,10 @@ export async function sourceDigest(root) {
     "scripts/docker-acceptance.mjs",
     "scripts/container-fixture.mjs",
     "scripts/docker-preview.mjs",
+    "docs/UNRAID_DOCKER_TAB.md",
+    "docs/TV_INSTALLATION.md",
+    "docs/OPERATIONS.md",
+    "docs/WINDOWS_DOCKER.md",
   ])
     await add(path);
   await visit("src");

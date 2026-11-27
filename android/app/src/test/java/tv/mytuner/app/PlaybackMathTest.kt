@@ -5,6 +5,12 @@ import org.junit.Test
 
 class PlaybackMathTest {
     @Test
+    fun pausedPositionDisplaysSecondsAndHoursWithoutNegativeTime() {
+        assertEquals("0:00", PlaybackMath.displayTime(-10))
+        assertEquals("1:01", PlaybackMath.displayTime(61_999))
+        assertEquals("1:02:03", PlaybackMath.displayTime(3_723_000))
+    }
+    @Test
     fun acceptsLanOriginsAndRejectsCredentialLeaks() {
         assertEquals(
             "http://192.168.1.20:8777",

@@ -1,7 +1,8 @@
+import { confirmAction } from "./confirmation";
 import { SourcePathField } from "./SourcePathField";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "./api";
-import { Field, Form, Modal, Load, Select, ErrorBox } from "./ui";
+import { Field, Form, Modal, ModalCancel, Load, Select, ErrorBox } from "./ui";
 import { useDraftNavigation } from "./navigation";
 export type MetadataTarget =
   | { kind: "media"; mediaId: string }
@@ -29,6 +30,11 @@ type Info = {
     { value: string | null; source: string; status: string }
   >;
   requiresReview: boolean;
+  retained?: {
+    choices: { title: Choice; description: Choice };
+    identity: string;
+    checkedMs: number | null;
+  } | null;
 };
 export function MetadataEditor({
   profileId,
@@ -41,6 +47,7 @@ export function MetadataEditor({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const formId = useId();
   const [info, setInfo] = useState<Info | null>(null),
     [choices, setChoices] = useState<Info["choices"] | null>(null),
     [checked, setChecked] = useState<Candidate | null>(null),
@@ -54,8 +61,8 @@ export function MetadataEditor({
     ? "A save or check is pending. A save already received by the server may still finish. Close this edit?"
     : "Discard unsaved content information?";
   useDraftNavigation(dirty || busy, message);
-  const close = () => {
-    if ((!dirty && !busy) || window.confirm(message)) onClose();
+  const close = async () => {
+    if ((!dirty && !busy) || (await confirmAction(message))) onClose();
   };
   const load = async (signal = controller.current.signal) => {
     setError(null);
@@ -95,6 +102,19 @@ export function MetadataEditor({
     <Modal
       title={`Edit ${target.kind === "show" ? "show" : "video"} information`}
       onClose={close}
+      closeDisabled={busy}
+      footer={
+        <div className="actions">
+          <button
+            type="submit"
+            form={formId}
+            disabled={busy || !info || !choices}
+          >
+            Save information
+          </button>
+          <ModalCancel />
+        </div>
+      }
     >
       <p>
         Display information saves immediately. Files, episode order and
@@ -105,6 +125,8 @@ export function MetadataEditor({
       )}
       {info && choices && (
         <Form
+          id={formId}
+          hideActions
           guardDraft={false}
           disabled={busy}
           submit="Save information"
@@ -144,6 +166,30 @@ export function MetadataEditor({
               retained for review and is not applied to this replacement.
             </p>
           )}
+          {info.retained && (
+            <section
+              className="panel stack metadata-retained"
+              aria-label="Retained information from previous media"
+            >
+              <h3>Review previous information</h3>
+              <p>
+                These choices belong to the previous video at this path. Review
+                each field before using it for this replacement. The buttons
+                below change this draft only; Save information applies the
+                reviewed choices.
+              </p>
+              {info.retained.checkedMs && (
+                <p>
+                  Previous metadata checked{" "}
+                  {new Date(info.retained.checkedMs).toLocaleString()}.
+                </p>
+              )}
+              <details>
+                <summary>Previous media version</summary>
+                <code>{info.retained.identity}</code>
+              </details>
+            </section>
+          )}
           {(["title", "description"] as const).map((field) => {
             const choice = choices[field],
               local = checked ?? info.candidates.local;
@@ -169,6 +215,72 @@ export function MetadataEditor({
             return (
               <section className="panel stack" key={field}>
                 <h3>{field === "title" ? "Title" : "Description"}</h3>
+                {info.retained && (
+                  <div className="notice metadata-preview">
+                    <strong>
+                      Previous {field} choice:{" "}
+                      {info.retained.choices[field].source === "local"
+                        ? "Local metadata"
+                        : info.retained.choices[field].source}
+                    </strong>
+                    {info.retained.choices[field].manual !== undefined && (
+                      <p>
+                        Retained manual {field}:{" "}
+                        {info.retained.choices[field].manual || "(empty)"}
+                      </p>
+                    )}
+                    {info.retained.choices[field].source !== "manual" && (
+                      <p>
+                        Using the previous source choice reads this
+                        replacement’s current metadata. It does not recover an
+                        old local or provider value.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy}
+                      onClick={async () => {
+                        const retained = info.retained!.choices[field];
+                        if (
+                          JSON.stringify(choice) !==
+                            JSON.stringify(info.choices[field]) &&
+                          !(await confirmAction(
+                            `Replace the ${field} choice in this draft with the retained choice?`,
+                          ))
+                        )
+                          return;
+                        change(field, { ...retained });
+                      }}
+                    >
+                      Stage retained {field} choice
+                    </button>
+                    {info.retained.choices[field].source !== "manual" &&
+                      info.retained.choices[field].manual !== undefined && (
+                        <button
+                          type="button"
+                          className="secondary"
+                          disabled={busy}
+                          onClick={async () => {
+                            if (
+                              JSON.stringify(choice) !==
+                                JSON.stringify(info.choices[field]) &&
+                              !(await confirmAction(
+                                `Replace the ${field} choice in this draft with the retained manual value?`,
+                              ))
+                            )
+                              return;
+                            change(field, {
+                              source: "manual",
+                              manual: info.retained!.choices[field].manual!,
+                            });
+                          }}
+                        >
+                          Use retained manual {field}
+                        </button>
+                      )}
+                  </div>
+                )}
                 <Select
                   label={`${field === "title" ? "Title" : "Description"} source`}
                   value={choice.source}
@@ -220,14 +332,14 @@ export function MetadataEditor({
                   type="button"
                   className="secondary"
                   disabled={busy}
-                  onClick={() => {
+                  onClick={async () => {
                     const current = value ?? info.effective[field].value ?? "";
                     if (
                       choice.manual &&
                       choice.manual !== current &&
-                      !window.confirm(
+                      !(await confirmAction(
                         `Replace the saved manual ${field} in this draft?`,
-                      )
+                      ))
                     )
                       return;
                     change(field, { source: "manual", manual: current });
@@ -257,7 +369,7 @@ export function MetadataEditor({
               type="button"
               className="secondary"
               disabled={busy}
-              onClick={() => {
+              onClick={async () => {
                 setBusy(true);
                 setError(null);
                 void api<Candidate>(
@@ -298,12 +410,12 @@ export function MetadataEditor({
             type="button"
             className="secondary"
             disabled={busy}
-            onClick={() => {
+            onClick={async () => {
               if (
                 !dirty ||
-                window.confirm(
+                (await confirmAction(
                   "Discard this draft and load the latest information?",
-                )
+                ))
               )
                 void load();
             }}

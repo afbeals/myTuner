@@ -133,11 +133,16 @@ test("production library route defaults omitted limits to a bounded reader page"
   let validations = 0;
   const reader: Pick<
     CatalogService,
-    "libraryPage" | "optionsPage" | "assertCurrent"
+    | "libraryPage"
+    | "optionsPage"
+    | "selectionPage"
+    | "treePage"
+    | "assertCurrent"
   > = {
     libraryPage: async (_account, _profile, input) => {
       received.push({ offset: input.offset, limit: input.limit });
       return {
+        revision: 0,
         sources: [],
         shows: [],
         movies: [],
@@ -146,6 +151,12 @@ test("production library route defaults omitted limits to a bounded reader page"
         savedCollections: [],
         pagination: { offset: input.offset, limit: input.limit, total: 42 },
       };
+    },
+    selectionPage: async () => {
+      throw new Error("Unexpected selection call");
+    },
+    treePage: async () => {
+      throw new Error("Unexpected tree call");
     },
     optionsPage: async () => {
       throw new Error("Unexpected options call");

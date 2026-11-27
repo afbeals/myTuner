@@ -1,6 +1,6 @@
 # I47: channel details and editable library information
 
-Status: implemented locally in unreleased 0.2.0, introduced in schema 14 and retained in current schema16. Channel details include descriptions and revision checks. Administrator library editors offer per-field Automatic, Sonarr/Radarr, local NFO and manual choices, cached previews, explicit checks and guarded saves. Native channel information and shared display/search projections use these values. Physical Bravia/Fire display acceptance remains pending. No web enrichment is included.
+Status: implemented; introduced in schema 14 and retained in current 0.3.0/schema 20. Channel details include descriptions and revision checks. Administrator library editors offer per-field Automatic, Sonarr/Radarr, local NFO and manual choices, cached previews, explicit checks and guarded saves. Native channel information and shared display/search projections use these values. Physical Bravia/Fire display acceptance remains pending. No web enrichment is included.
 
 ## Edit modal
 
@@ -8,7 +8,7 @@ An **Edit** action opens a modal over the current channel or library view. Save 
 
 ### Implemented separate editors
 
-Choose **Edit details** from a channel row or its preview to change the existing name, automatic/supplied short name and visibility. **Save channel details** takes effect immediately; it does not publish programming. Cancel/Close/Escape confirm discarding unsaved edits. A pending save warns that closing cannot undo a request the server already received. Failed saves retain the draft for retry; a closed editor's delayed completion cannot alter another editor.
+In **My Network**, choose **Edit details** from a channel card or its preview to change the existing name, automatic/supplied short name, description and visibility. **Save channel details** takes effect immediately; it does not publish programming. Cancel/Close/Escape confirm discarding unsaved edits. A pending save warns that closing cannot undo a request the server already received. Failed saves retain the draft for retry; a closed editor's delayed completion cannot alter another editor.
 
 Choose **Edit programming** for content groups, commercials, preview and publication. Its **Edit details** action opens the details modal above the current programming draft. Closing details restores focus and the unchanged unpublished programming draft. Both editors have distinct component identities. Existing owner/admin authority applies; a non-admin owner can retain existing shared visibility while renaming a shared channel. Making a channel shared still requires admin permission.
 
@@ -99,3 +99,13 @@ Administrator POST `/api/profiles/:profileId/metadata/inspect`, `/check` and `/s
 PUT `/api/sources/:sourceId/metadata-location` accepts `{root:string|null}`. Null means adjacent files. An explicit root must exist, be a directory and not overlap writable storage. Checks retain their last valid cached fields with no-file/read-failed/stale-location status when a later check or mapping fails. Automatic preserves cached integration priority during outages.
 
 Schema 14 adds channels.description/details_revision, sources.metadata_root and display_metadata. The latter stores a stable target key, source foreign key, identity, monotonically increasing revision, independent choices/manual text, optional local candidate JSON and last check time. Full SQLite snapshots include these rows. Overrides are presentation only; raw show keys, numbers, ordering, fingerprints and schedule entries remain unchanged. An ambiguous local-file identity replacement stops applying old choices; accepting the new identity clears the former local snapshot. Integration item references retain manual choices across provider refreshes.
+
+### Review retained choices after a replacement
+
+An identity replacement sets `requiresReview: true` and uses current/default choices rather than automatically applying the old information. The authorized administrator `/metadata/inspect` response additionally returns `retained: {choices,identity,checkedMs}` for the previous record, or null when there is no replacement to review. `choices` contains the saved per-field source and any manual text, `identity` is an opaque prior identity, and `checkedMs` is nullable. These retained values are editor detail data; ordinary catalog/guide projections do not include them, and viewing/non-admin callers cannot inspect them.
+
+The editor can show the old source/manual choices and deliberately copy a retained field into the current unsaved draft. Review the result, then use the normal `/metadata/save` request with the **current** inspect revision and selected `choices`. Copying is not an automatic reapply or a separate mutation; a competing change still returns 409. Choosing Local or Sonarr/Radarr uses that field's current candidate, not a promise to recover an old candidate snapshot. Files, catalog identity/order and scheduled timing remain unchanged.
+
+## Current management locations — 0.3.0
+
+Show/movie/video information is opened from **My Network → Your library**; the former Library link remains valid. Metadata editing stays a separate modal from exact-video selection and from channel programming. In **Sources → Configure → Metadata**, a separate read-only metadata directory is staged with subtitle, integration and refresh settings and committed using the single **Save configuration** footer action. Save validates changed locations; it does not generate NFO files or start a source scan. The new-channel wizard includes channel description in its details step; existing-channel detail saves still take effect independently of programming publication.

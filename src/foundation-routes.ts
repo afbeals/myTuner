@@ -1,3 +1,6 @@
+import { collectionMembership } from "./collection-membership.js";
+import { registerChannelLifecycle } from "./channel-lifecycle.js";
+import { browseSelectionPage, browseCatalogTree } from "./catalog-selection.js";
 import type { CatalogService } from "./catalog-service.js";
 import { readCatalogRequest } from "./catalog-request.js";
 import { browseLibraryPage } from "./library-page.js";
@@ -21,6 +24,7 @@ import {
   browseLibrary,
   selectMedia,
   saveCollection,
+  createCollection,
   programmingOptions,
 } from "./library.js";
 import {
@@ -30,6 +34,7 @@ import {
   visibleChannel,
   canReadMedia,
   createMediaAuthorizer,
+  programmingActor,
 } from "./security.js";
 import { ProgrammingService } from "./programming.js";
 export function registerFoundationRoutes(
@@ -40,13 +45,18 @@ export function registerFoundationRoutes(
   collectionRetentionDays = 7,
   catalog?: Pick<
     CatalogService,
-    "libraryPage" | "optionsPage" | "assertCurrent"
+    | "libraryPage"
+    | "optionsPage"
+    | "selectionPage"
+    | "treePage"
+    | "assertCurrent"
   >,
 ) {
   const pagination = z.object({
     offset: z.coerce.number().int().min(0).max(1000000).default(0),
     limit: z.coerce.number().int().min(1).max(100).default(25),
   });
+  registerChannelLifecycle(app, store, actor, programming);
   app.get(
     "/api/profiles/:profileId/collections/:collectionId/dependencies",
     async (request) => {
@@ -136,6 +146,7 @@ export function registerFoundationRoutes(
       .object({
         search: z.string().trim().max(200).default(""),
         sourceId: uuid.optional(),
+        titleOnly: z.enum(["true", "false"]).default("false"),
         kind: z
           .enum(["all", "shows", "movies", "videos", "collections"])
           .default("all"),
@@ -145,7 +156,11 @@ export function registerFoundationRoutes(
       .parse(request.query);
     if (input.limit === undefined && !catalog)
       return browseLibrary(store, account, profileId, input.search);
-    const page = { ...input, limit: input.limit ?? 24 };
+    const page = {
+      ...input,
+      limit: input.limit ?? 24,
+      titleOnly: input.titleOnly === "true",
+    };
     return catalog
       ? readCatalogRequest(
           store,
@@ -167,6 +182,10 @@ export function registerFoundationRoutes(
       const input = z
         .object({
           search: z.string().trim().max(200).default(""),
+          titleOnly: z
+            .enum(["true", "false"])
+            .default("false")
+            .transform((value) => value === "true"),
           offset: z.coerce.number().int().min(0).max(1000000).default(0),
           limit: z.coerce.number().int().min(1).max(100).default(50),
           sourceId: uuid.optional(),
@@ -222,40 +241,80 @@ export function registerFoundationRoutes(
         .slice(0, 100),
     };
   });
-  app.post("/api/profiles/:profileId/selection", async (request) => {
+  app.post("/api/profiles/:profileId/selection", async (request, reply) => {
     const account = actor(request),
       { profileId } = z.object({ profileId: uuid }).parse(request.params),
-      selection = selectionSchema.parse(request.body),
-      query = z
-        .object({
-          includeUnavailable: z.enum(["true", "false"]).default("false"),
-        })
-        .parse(request.query);
-    const rows = selectMedia(
-      store,
-      account,
-      profileId,
+      selection = selectionSchema.parse(request.body);
+    const query = z
+      .object({
+        includeUnavailable: z.enum(["true", "false"]).default("false"),
+        offset: z.coerce.number().int().min(0).max(1000000).default(0),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        search: z.string().trim().max(200).default(""),
+      })
+      .parse(request.query);
+    const input = {
+      ...query,
       selection,
-      query.includeUnavailable === "true",
-    );
-    const project = createMediaProjector(store, rows);
-    return {
-      items: rows.map(project).map((m) => ({
-        id: m.id,
-        title: m.title,
-        sourceId: m.source_id,
-        durationMs: m.duration_ms,
-        available: Boolean(m.available),
-        path: m.relative_path,
-        metadata: JSON.parse(m.metadata_json),
-      })),
+      includeUnavailable: query.includeUnavailable === "true",
     };
+    if (catalog)
+      return readCatalogRequest(
+        store,
+        request,
+        reply,
+        actor,
+        profileId,
+        (signal) =>
+          catalog.selectionPage(account, profileId, input, { signal }),
+        (result, current) => catalog.assertCurrent(result, current, profileId),
+      );
+    await (
+      await import("./catalog-projection.js")
+    ).ensureCatalogProjection(store);
+    return browseSelectionPage(store, account, profileId, input);
+  });
+  app.get("/api/profiles/:profileId/catalog/tree", async (request, reply) => {
+    const account = actor(request),
+      { profileId } = z.object({ profileId: uuid }).parse(request.params);
+    const input = z
+      .object({
+        sourceId: z.union([uuid, z.literal("")]).default(""),
+        parent: z.string().max(4096).default(""),
+        offset: z.coerce.number().int().min(0).max(1000000).default(0),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        search: z.string().trim().max(200).default(""),
+        recursive: z.enum(["true", "false"]).default("false"),
+        mode: z.enum(["folders", "files"]).default("folders"),
+        includeCommercials: z.enum(["true", "false"]).default("true"),
+      })
+      .parse(request.query);
+    const query = {
+      ...input,
+      recursive: input.recursive === "true",
+      includeCommercials: input.includeCommercials === "true",
+    };
+    if (catalog)
+      return readCatalogRequest(
+        store,
+        request,
+        reply,
+        actor,
+        profileId,
+        (signal) => catalog.treePage(account, profileId, query, { signal }),
+        (result, current) => catalog.assertCurrent(result, current, profileId),
+      );
+    await (
+      await import("./catalog-projection.js")
+    ).ensureCatalogProjection(store);
+    return browseCatalogTree(store, account, profileId, query);
   });
   app.post("/api/profiles/:profileId/collections", async (request, reply) => {
     const account = actor(request),
       { profileId } = z.object({ profileId: uuid }).parse(request.params),
       body = z
         .object({
+          creationId: uuid,
           name: z.string().trim().min(1).max(120),
           mediaIds: z.array(uuid).min(1).max(5000),
         })
@@ -264,9 +323,30 @@ export function registerFoundationRoutes(
     return reply
       .code(201)
       .send(
-        saveCollection(store, account, profileId, body.name, body.mediaIds),
+        createCollection(
+          store,
+          account,
+          profileId,
+          body.creationId,
+          body.name,
+          body.mediaIds,
+        ),
       );
   });
+  app.get(
+    "/api/profiles/:profileId/collections/:collectionId/membership",
+    async (request) => {
+      const { profileId, collectionId } = z
+        .object({ profileId: uuid, collectionId: uuid })
+        .parse(request.params);
+      return collectionMembership(
+        store,
+        actor(request),
+        profileId,
+        collectionId,
+      );
+    },
+  );
   app.get(
     "/api/profiles/:profileId/collections/:collectionId",
     async (request) => {
@@ -317,6 +397,7 @@ export function registerFoundationRoutes(
           .object({
             name: z.string().trim().min(1).max(120),
             mediaIds: z.array(uuid).min(1).max(5000),
+            expectedRevision: z.string().length(64).optional(),
           })
           .strict()
           .parse(request.body);
@@ -327,6 +408,7 @@ export function registerFoundationRoutes(
         body.name,
         body.mediaIds,
         collectionId,
+        body.expectedRevision,
       );
     },
   );
@@ -349,10 +431,21 @@ export function registerFoundationRoutes(
           return [
             {
               ...row,
-              count: selectMedia(store, account, profileId, {
-                type: "collection",
-                id: row.id,
-              }).length,
+              ...(() => {
+                const items = selectMedia(
+                  store,
+                  account,
+                  profileId,
+                  { type: "collection", id: row.id },
+                  true,
+                );
+                const count = items.filter((item) => item.available).length;
+                return {
+                  count,
+                  totalCount: items.length,
+                  unavailableCount: items.length - count,
+                };
+              })(),
             },
           ];
         } catch {
@@ -468,14 +561,26 @@ export function registerFoundationRoutes(
           ...new Set(result.entries.map((entry) => entry.mediaId)),
         ]),
       ) as unknown as import("./domain.js").Media[];
-    const items = new Map(rows.map((item) => [item.id, item]));
-    const project = createMediaProjector(store, rows);
+    const authorized = createMediaAuthorizer(
+      store,
+      programmingActor(store, account, config.profileId),
+      config.profileId,
+    );
+    const permitted = rows.filter(authorized);
+    const items = new Map(permitted.map((item) => [item.id, item]));
+    const project = createMediaProjector(store, permitted);
     return {
       ...result,
-      entries: result.entries.map((entry) => ({
-        ...entry,
-        title: project(items.get(entry.mediaId)!).title,
-      })),
+      entries: result.entries.map((entry) => {
+        const item = items.get(entry.mediaId);
+        return {
+          ...entry,
+          title: item ? project(item).title : "Unavailable video",
+          ...(item
+            ? { sourceId: item.source_id, relativePath: item.relative_path }
+            : {}),
+        };
+      }),
     };
   });
   app.put("/api/channels/:channelId/programming", async (request) => {
@@ -512,7 +617,7 @@ export function registerFoundationRoutes(
     return {
       items: store.db
         .prepare(
-          "SELECT id,name,description,details_revision,owner_account_id AS ownerAccountId,visibility,archived,short_name FROM channels ORDER BY name,id",
+          "SELECT id,name,description,details_revision,owner_account_id AS ownerAccountId,visibility,archived,short_name,EXISTS(SELECT 1 FROM active_schedules a WHERE a.channel_id=channels.id) AS has_programming FROM channels ORDER BY name,id",
         )
         .all(),
     };

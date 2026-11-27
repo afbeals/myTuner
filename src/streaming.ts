@@ -1,16 +1,15 @@
+import { randomUUID } from "node:crypto";
+import { OutputPaths } from "./output-paths.js";
+import {
+  outputCleanupDisabled,
+  assertSafeOutputRoot,
+} from "./storage-safety.js";
+import { directoryBytes } from "./storage.js";
 import { advertisedSubtitles } from "./subtitle-catalog.js";
 import { textSubtitleCodecs, playbackDecision } from "./playback-policy.js";
 import { EncoderAdmission } from "./encoder-admission.js";
 import { createHash } from "node:crypto";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  statfs,
-} from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, statfs } from "node:fs/promises";
 import { join } from "node:path";
 import type { Account, Media } from "./domain.js";
 import { DomainError, invariant } from "./domain.js";
@@ -43,6 +42,8 @@ export class StreamingService {
   private cleanupJob: Promise<void> | undefined;
   private lastCleanup = 0;
   private publishedSinceCleanup = 0;
+  private protectedReservations = 0;
+  private readonly outputs: OutputPaths;
   constructor(
     private readonly store: Store,
     private readonly playback: PlaybackService,
@@ -50,7 +51,9 @@ export class StreamingService {
     private readonly maxBytes = 512 * 1024 * 1024,
     private readonly execute = runFFmpeg,
     private readonly encoders = new EncoderAdmission(),
-  ) {}
+  ) {
+    this.outputs = new OutputPaths(root, store);
+  }
   manifest(
     account: Account,
     sessionId: string,
@@ -264,7 +267,7 @@ export class StreamingService {
         ]),
       )
       .digest("hex");
-    await mkdir(this.root, { recursive: true });
+    this.outputs.create([]);
     const output = join(this.root, key + ".ts");
     try {
       invariant(
@@ -356,92 +359,108 @@ export class StreamingService {
     authorize: () => void = () => {},
   ) {
     await this.cleanup();
-    const fs = await statfs(this.root);
-    invariant(
-      fs.bavail * fs.bsize > 32 * 1024 * 1024,
-      507,
-      "Insufficient playback cache space",
-    );
-    const technical =
-      (JSON.parse(item.metadata_json) as { technical?: Inspection })
-        .technical ?? (await probeMedia(input));
-    const audio =
-      audioTrack === undefined
-        ? (technical.streams.find((s) => s.type === "audio" && s.default) ??
-          technical.streams.find((s) => s.type === "audio"))
-        : technical.streams.find(
-            (s) => s.type === "audio" && s.index === audioTrack,
-          );
-    invariant(audioTrack === undefined || audio, 400, "Invalid audio track");
-    const duration = (Math.min(segmentMs, entry.end_ms - start) / 1000).toFixed(
-        3,
-      ),
-      offset = ((entry.offset_ms + start - entry.start_ms) / 1000).toFixed(3),
-      temporary = output + ".partial.ts";
-    const args = [
-      "-ss",
-      offset,
-      "-i",
-      input,
-      ...(audio
-        ? []
-        : [
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=channel_layout=stereo:sample_rate=48000",
-          ]),
-      "-t",
-      duration,
-      "-map",
-      "0:v:0",
-      "-map",
-      audio ? `0:${audio.index}` : "1:a:0",
-      "-vf",
-      "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
-      "-r",
-      "30",
-      "-c:v",
-      "libx264",
-      "-threads",
-      "2",
-      "-preset",
-      "veryfast",
-      "-pix_fmt",
-      "yuv420p",
-      "-b:v",
-      "1500k",
-      "-maxrate",
-      "2000k",
-      "-bufsize",
-      "4000k",
-      "-g",
-      "120",
-      "-sc_threshold",
-      "0",
-      "-c:a",
-      "aac",
-      "-ar",
-      "48000",
-      "-ac",
-      "2",
-      "-b:a",
-      "128k",
-      "-avoid_negative_ts",
-      "make_zero",
-      "-mpegts_flags",
-      "+resend_headers",
-      "-fs",
-      "8388608",
-      "-f",
-      "mpegts",
-      temporary,
-    ];
+    let reserved = 0;
+    let stage: ReturnType<OutputPaths["stage"]> | undefined;
     try {
+      if (outputCleanupDisabled(this.store)) {
+        assertSafeOutputRoot(this.store, this.root);
+        const used = await directoryBytes(this.root);
+        const allowance = 16 * 1024 * 1024;
+        invariant(
+          used + this.protectedReservations + allowance <= this.maxBytes,
+          507,
+          "Preserved playback cache is full after a data reset; configure a new dedicated empty cache root",
+        );
+        this.protectedReservations += allowance;
+        reserved = allowance;
+      }
+      const fs = await statfs(this.root);
+      invariant(
+        fs.bavail * fs.bsize - this.protectedReservations > 32 * 1024 * 1024,
+        507,
+        "Insufficient playback cache space",
+      );
+      const technical =
+        (JSON.parse(item.metadata_json) as { technical?: Inspection })
+          .technical ?? (await probeMedia(input));
+      const audio =
+        audioTrack === undefined
+          ? (technical.streams.find((s) => s.type === "audio" && s.default) ??
+            technical.streams.find((s) => s.type === "audio"))
+          : technical.streams.find(
+              (s) => s.type === "audio" && s.index === audioTrack,
+            );
+      invariant(audioTrack === undefined || audio, 400, "Invalid audio track");
+      const duration = (
+          Math.min(segmentMs, entry.end_ms - start) / 1000
+        ).toFixed(3),
+        offset = ((entry.offset_ms + start - entry.start_ms) / 1000).toFixed(3),
+        temporaryName = `.partial-${randomUUID()}.ts`;
+      stage = this.outputs.stage(temporaryName);
+      const temporary = stage.path;
+      const args = [
+        "-ss",
+        offset,
+        "-i",
+        input,
+        ...(audio
+          ? []
+          : [
+              "-f",
+              "lavfi",
+              "-i",
+              "anullsrc=channel_layout=stereo:sample_rate=48000",
+            ]),
+        "-t",
+        duration,
+        "-map",
+        "0:v:0",
+        "-map",
+        audio ? `0:${audio.index}` : "1:a:0",
+        "-vf",
+        "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
+        "-r",
+        "30",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "2",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "1500k",
+        "-maxrate",
+        "2000k",
+        "-bufsize",
+        "4000k",
+        "-g",
+        "120",
+        "-sc_threshold",
+        "0",
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "128k",
+        "-avoid_negative_ts",
+        "make_zero",
+        "-mpegts_flags",
+        "+resend_headers",
+        "-fs",
+        "8388608",
+        "-f",
+        "mpegts",
+        temporary,
+      ];
       signal.throwIfAborted();
       const deadline = AbortSignal.any([signal, AbortSignal.timeout(60000)]);
       await this.encoders.run("interactive", deadline, authorize, () =>
-        this.execute(args, deadline),
+        this.execute(args, deadline, { fd: stage!.fd, format: "mpegts" }),
       );
       signal.throwIfAborted();
       const after = await stat(input);
@@ -450,17 +469,21 @@ export class StreamingService {
         409,
         "Source changed while streaming",
       );
-      const bytes = await readFile(temporary);
+      const bytes = this.outputs.read(stage, 8388608);
       invariant(
         bytes.length > 0 && bytes.length < 8388608,
         502,
         "Invalid playback output",
       );
-      await rename(temporary, output);
+      this.outputs.publish(
+        stage,
+        this.outputs.prepare(output.slice(this.root.length + 1), false),
+      );
       this.publishedSinceCleanup += bytes.length;
       return bytes;
     } finally {
-      await rm(temporary, { force: true });
+      this.protectedReservations -= reserved;
+      if (stage) this.outputs.close(stage);
     }
   }
   cleanup(now = Date.now()): Promise<void> {
@@ -483,6 +506,8 @@ export class StreamingService {
     return this.cleanupJob;
   }
   private async evictCache(now: number) {
+    assertSafeOutputRoot(this.store, this.root);
+    if (outputCleanupDisabled(this.store)) return;
     await mkdir(this.root, { recursive: true });
     const files: { path: string; size: number; mtime: number }[] = [];
     for (const name of await readdir(this.root)) {
@@ -508,6 +533,8 @@ export class StreamingService {
         file.mtime < now - 10 * 60000 ||
         bytes > Math.max(0, this.maxBytes - 32 * 1024 * 1024)
       ) {
+        if (outputCleanupDisabled(this.store)) return;
+        assertSafeOutputRoot(this.store, this.root);
         await rm(file.path, { force: true });
         bytes -= file.size;
       }
@@ -517,6 +544,7 @@ export class StreamingService {
     for (const job of this.active.values()) job.controller.abort();
     await Promise.allSettled([
       ...this.pending,
+      this.cleanupJob,
       ...[...this.active.values()].map((j) => j.promise),
     ]);
   }

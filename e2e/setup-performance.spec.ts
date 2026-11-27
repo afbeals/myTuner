@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 async function login(page: Page) {
@@ -7,6 +8,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -44,12 +46,14 @@ test("mount choices stay explicit, filter locally and preserve manual paths with
   });
   await login(page);
   await page.goto("/#sources");
-  await page.getByRole("button", { name: "+ Add source", exact: true }).click();
+  await page.getByRole("button", { name: "Add source", exact: true }).click();
   const dialog = page.getByRole("dialog", {
     name: "Add a source",
     exact: true,
   });
-  const path = dialog.getByLabel("Container media path", { exact: true });
+  const path = dialog.getByLabel("Media directory inside MyTuner", {
+    exact: true,
+  });
   await path.fill("/synthetic/manual");
   expect(choices).toBe(0);
   await dialog
@@ -57,20 +61,18 @@ test("mount choices stay explicit, filter locally and preserve manual paths with
     .click();
   await expect(
     dialog.getByRole("button", {
-      name: "/synthetic/TV Shows · read-only · not checked",
+      name: "Use directory /synthetic/TV Shows",
       exact: true,
     }),
   ).toBeVisible();
+  await dialog.getByLabel("Filter source mounts", { exact: true }).fill("TV");
   await dialog
-    .getByLabel("Find source directory choice", { exact: true })
-    .fill("TV");
-  await dialog
-    .getByLabel("Find source directory choice", { exact: true })
+    .getByLabel("Filter source mounts", { exact: true })
     .press("Enter");
   await expect(dialog).toBeVisible();
   await expect(
     dialog.getByRole("button", {
-      name: "/synthetic/Movies · read-only · not checked",
+      name: "Use directory /synthetic/Movies",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -93,7 +95,7 @@ test("mount choices stay explicit, filter locally and preserve manual paths with
   ).toEqual([]);
   await dialog
     .getByRole("button", {
-      name: "/synthetic/TV Shows · read-only · not checked",
+      name: "Use directory /synthetic/TV Shows",
       exact: true,
     })
     .focus();
@@ -149,10 +151,18 @@ test("provider mapping choices refresh only on request, preview cached samples a
     scans = 0;
   let releaseLate: (() => void) | undefined;
   let delay = false;
-  await page.route(`**/api/sources/${source.id}/integration`, async (route) => {
-    if (route.request().method() === "GET") await route.fulfill({ json: null });
-    else await route.fallback();
-  });
+  await page.route(
+    `**/api/sources/${source.id}/configuration`,
+    async (route) => {
+      if (route.request().method() === "GET") {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), integration: null },
+        });
+      } else await route.fallback();
+    },
+  );
   await page.route(
     `**/api/sources/${source.id}/provider-suggestions`,
     (route) =>
@@ -207,37 +217,32 @@ test("provider mapping choices refresh only on request, preview cached samples a
     exact: true,
   });
   await dialog
-    .getByLabel("Application URL", { exact: true })
+    .getByRole("button", { name: "Connect Sonarr", exact: true })
+    .click();
+  await dialog
+    .getByLabel("Sonarr address", { exact: true })
     .fill("http://provider:8989/base");
   await dialog.getByLabel("API key", { exact: true }).fill("synthetic-key");
   expect(refreshes).toBe(0);
   await dialog
-    .getByRole("button", { name: "Refresh provider suggestions", exact: true })
+    .getByRole("button", { name: "Get application folders", exact: true })
     .click();
   await dialog
-    .getByRole("button", { name: "Choose mapping roots", exact: true })
+    .getByRole("button", { name: "Use folder mapping", exact: true })
     .click();
-  await dialog
-    .getByRole("combobox", { name: "Observed provider root", exact: true })
-    .selectOption("/provider/tv");
   await expect(
-    dialog.getByLabel("Mapped source directory", { exact: true }),
+    dialog.getByLabel("Application path 1", { exact: true }),
+  ).toHaveValue("/provider/tv");
+  await expect(
+    dialog.getByLabel("MyTuner path 1", { exact: true }),
   ).toHaveValue(source.rootPath);
   await dialog
-    .getByRole("button", { name: "Add mapping row", exact: true })
-    .click();
-  await expect(dialog.locator("textarea[name=mappings]")).toHaveValue(
-    `/provider/tv => ${source.rootPath}`,
-  );
-  await dialog
     .getByRole("button", {
-      name: "Preview mapping against catalog",
+      name: "Check sample mappings",
       exact: true,
     })
     .click();
-  await expect(
-    dialog.getByLabel("Mapping preview", { exact: true }),
-  ).toContainText("matched");
+  await expect(dialog.locator(".bounded-checklist")).toContainText("matched");
   expect(previews).toBe(1);
   expect(refreshes).toBe(1);
   expect(scans).toBe(0);
@@ -261,22 +266,20 @@ test("provider mapping choices refresh only on request, preview cached samples a
   ).toEqual([]);
   delay = true;
   await dialog
-    .getByRole("button", { name: "Refresh provider suggestions", exact: true })
+    .getByRole("button", { name: "Get application folders", exact: true })
     .click();
   await expect.poll(() => refreshes).toBe(2);
   await dialog
-    .getByLabel("Application URL", { exact: true })
+    .getByLabel("Sonarr address", { exact: true })
     .fill("http://other-provider:8989");
   releaseLate!();
   await expect(
     dialog.getByRole("button", {
-      name: "Preview mapping against catalog",
+      name: "Check sample mappings",
       exact: true,
     }),
-  ).toBeDisabled();
-  await expect(
-    dialog.getByLabel("Mapping preview", { exact: true }),
-  ).toHaveCount(0);
+  ).toBeEnabled();
+  await expect(dialog.locator(".bounded-checklist")).toHaveCount(0);
   expect(scans).toBe(0);
 });
 
@@ -302,13 +305,21 @@ test("copying a saved provider connection sends only an explicit server referenc
     }),
   );
   let saved: Record<string, unknown> | null = null;
-  await page.route(`**/api/sources/${source.id}/integration`, async (route) => {
-    if (route.request().method() === "GET") await route.fulfill({ json: null });
-    else {
-      saved = route.request().postDataJSON();
-      await route.fulfill({ status: 204 });
-    }
-  });
+  await page.route(
+    `**/api/sources/${source.id}/configuration`,
+    async (route) => {
+      if (route.request().method() === "GET") {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), integration: null },
+        });
+      } else {
+        saved = route.request().postDataJSON().integration;
+        await route.fulfill({ status: 204 });
+      }
+    },
+  );
   await page.goto("/#sources");
   await page
     .getByRole("button", { name: `Configure ${source.name}`, exact: true })
@@ -318,20 +329,24 @@ test("copying a saved provider connection sends only an explicit server referenc
     exact: true,
   });
   await dialog
+    .getByRole("button", { name: "Connect Sonarr", exact: true })
+    .click();
+  await dialog
     .getByRole("combobox", {
-      name: "Copy a saved provider connection",
+      name: "Use a saved connection",
       exact: true,
     })
     .selectOption(reference);
   await expect(
-    dialog.getByLabel("Application URL", { exact: true }),
+    dialog.getByLabel("Sonarr address", { exact: true }),
   ).toHaveValue("http://provider:8989/base/");
   await expect(dialog.getByLabel("API key", { exact: true })).toHaveValue("");
+  await dialog.getByLabel("Application path 1", { exact: true }).fill("/tv");
   await dialog
-    .locator("textarea[name=mappings]")
-    .fill(`/tv => ${source.rootPath}`);
+    .getByLabel("MyTuner path 1", { exact: true })
+    .fill(source.rootPath);
   await dialog
-    .getByRole("button", { name: "Save metadata integration", exact: true })
+    .getByRole("button", { name: "Save configuration", exact: true })
     .click();
   await expect.poll(() => saved).not.toBeNull();
   expect(saved).toMatchObject({

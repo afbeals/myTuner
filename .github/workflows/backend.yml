@@ -71,6 +71,9 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-chromium-${{ hashFiles('package-lock.json') }}
       - run: ./node_modules/.bin/playwright install chromium
       - run: npm run test:ui -- --shard=${{ matrix.shard }}/3
+      - name: Reset browser and offline CLI lifecycle
+        if: matrix.shard == 1
+        run: npm run test:reset-lifecycle
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

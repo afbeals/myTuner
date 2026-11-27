@@ -125,11 +125,22 @@ export class ProgrammingService {
         "Commercial not found",
       );
     }
-    invariant(
-      groups.some((g) => g.clips.length),
-      409,
-      "No available programming; channel schedule cannot advance",
-    );
+    if (!groups.some((group) => group.clips.length)) {
+      const index = groups.findIndex((group) => !group.clips.length);
+      const selection = config.groups[index]!.selection;
+      const context =
+        selection.type === "folder"
+          ? `, folder ${JSON.stringify(selection.directory || "(source root)")},`
+          : "";
+      const recovery =
+        selection.type === "folder"
+          ? "Scan the source or choose the replacement folder if it moved or was renamed."
+          : "Scan the source or choose replacement content for this group.";
+      throw new DomainError(
+        409,
+        `No available programming; content group ${index + 1}${context} has no available videos. ${recovery}`,
+      );
+    }
     // An empty group contributes no programs until its files become available, rather than resetting other groups.
     return {
       groups,
@@ -137,6 +148,29 @@ export class ProgrammingService {
         .filter((item) => !disabled.has(item.id))
         .map(toClip),
     };
+  }
+  previewNew(
+    account: Account,
+    channelId: string,
+    input: Programming,
+    now = Date.now(),
+    horizonMs = 30 * 60_000,
+  ) {
+    const config = programmingSchema.parse(input),
+      material = this.material(account, config);
+    return buildSchedule({
+      channelId,
+      startMs: now,
+      untilMs: now + Math.min(horizonMs, this.chunk(material, config)),
+      ...material,
+      rules: config.rules as import("./scheduler.js").BreakRules,
+      state: this.publicationState(
+        undefined,
+        config,
+        initialState(config.seed),
+        material.groups,
+      ),
+    });
   }
   preview(
     account: Account,

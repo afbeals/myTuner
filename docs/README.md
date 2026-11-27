@@ -1,6 +1,6 @@
 # myTuner documentation
 
-This is the entry point for the standalone personal TV project. Server/browser 0.2.2 / schema 19 and native 0.2.0 include the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. All six selected remaining bugs are fixed. Browser checks pass; native state/font/pairing checks have partial passing evidence. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
+This is the entry point for the standalone personal TV project. Server/browser and native 0.3.0 / schema 21 include the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. The current UI overhaul includes My Network, the channel wizard, temporary exact-video tray, shared folder trees and staged configuration. Earlier local checks are historical evidence; current-build verification and independent review are recorded separately. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
 
 See [Windows Docker acceptance](WINDOWS_DOCKER.md), [Unraid/TV pilot gates](PILOT_ACCEPTANCE.md) and [the 58-frame implementation inventory](DESIGN_COVERAGE.md) for the current delivery work.
 
@@ -10,6 +10,7 @@ See [Windows Docker acceptance](WINDOWS_DOCKER.md), [Unraid/TV pilot gates](PILO
 
 | Document                                              | What it explains                                                                                           | Primary reader                        |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| [My Network](MY_NETWORK.md)                           | Channels, library, collections, selection tray, wizard, subscriptions and privacy                          | Viewers and administrators            |
 | [Create your first channel](FIRST_CHANNEL.md)         | Browser steps from an empty server to a subscribed playable channel                                        | Household administrator               |
 | [TV installation and connection](TV_INSTALLATION.md)  | Install the Bravia/Google TV or Fire OS client and pair it to Unraid; artifact availability and acceptance | Household setup and delivery owner    |
 | [Supplied Figma handoff](DESIGN_REVIEW.md)            | Private review links, received design references and reconciliation with current APIs                      | Design and client developers          |
@@ -42,7 +43,7 @@ See [Windows Docker acceptance](WINDOWS_DOCKER.md), [Unraid/TV pilot gates](PILO
 
 ## Read in sequence
 
-For a team review, read the overview, architecture, applications, discovery, and architecture decisions. For implementation, continue with the database, scheduling/playback, security, and API reference. For setup, start with the TV installation guide, then read deployment and operational runbooks before touching real volumes. The Sony Bravia Android/Google TV experience is the primary target; Android-based Fire OS sticks are secondary.
+For a team review, read the overview, architecture, applications, discovery, and architecture decisions. For implementation, continue with the database, scheduling/playback, security, and API reference. For setup, start with [Unraid Docker-tab setup](UNRAID_DOCKER_TAB.md), follow [first channel](FIRST_CHANNEL.md), then install/connect the TV. Deployment and operational runbooks cover optional Compose/CLI and recovery before real volumes are changed. The Sony Bravia Android/Google TV experience is the primary target; Android-based Fire OS sticks are secondary.
 
 The checklist records delivery status. The verification record records evidence. A design requirement or deployment command in these guides does not mean it has been exercised on a physical TV or Unraid system.
 
@@ -80,3 +81,11 @@ When changing behavior, update the relevant reference, checklist and verificatio
 - [Read-only Unraid checks](UNRAID_CHECKS.md): current hardware baseline, safe diagnostics and controlled target-host acceptance.
 
 [Large-library browsing and directory checks](LARGE_LIBRARY.md) explains persisted indexing, worker requests, resource limits, first/subsequent-run costs and explicit setup-path validation.
+
+The [UI/UX review matrix and nested backlog](UI_UX_REVIEW.md) tracks the owner-requested investigation; [owner intake](UI_UX_OWNER_NOTES.md) preserves the requested outcomes and questions. The owner approved the complete scope; [implementation decisions](UI_UX_IMPLEMENTATION.md) and [local UI previews](UI_UX_PREVIEWS.md) accompany the current work. Verification/review status belongs in the checklist and verification record.
+
+The [three-reviewer workflow review](UI_UX_WORKFLOW_REVIEW.md) records independent source-to-playback walkthroughs, two additional 8,338-video nested-library passes, ranked usability findings and recommended next scenarios. These follow-up findings are review recommendations; no fixes were applied in that round.
+
+- [Reset application data safely](OPERATIONS.md#reset-application-data-offline): administrator review, stopped-server execution, private confirmation, verified backup and Unraid instructions.
+- [Reset safety and independent reviews](RESET_SAFETY_REVIEW.md): two-round destructive-test evidence, file-preservation boundaries and remaining review work.
+- [Walkthrough fix coverage](UI_UX_FIX_COVERAGE.md): every confirmed workflow/scenario finding mapped to implementation and regression evidence.

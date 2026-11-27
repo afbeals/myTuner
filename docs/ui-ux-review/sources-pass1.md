@@ -1,0 +1,41 @@
+# Sources — owner-request review, pass 1
+
+**Reviewer:** `/root/ux_sources_r1`. **Route:** `#sources`. **Build:** 0.2.2, commit `a67d418`. **Runtime:** isolated synthetic demo, port 19001, Chromium, 1440×1000 and 390×1000. No application code or source media changed.
+
+Evidence: `/private/tmp/mytuner-ui-review/sources-p1/` contains nine screenshots, ARIA snapshots, `review-observations.json`, console/network observations and server log. Desktop and narrow screenshots were visually inspected. `/private/tmp/mytuner-ui-review/sources-scan-p1/` records a real synthetic scan. No provider inventory was mocked or contacted; saved test connection credentials were synthetic.
+
+## Owner-item coverage and current behavior
+
+| Item   | Disposition / observation                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SRC-01 | Partly implemented: saved source roots prefill Edit; Linux suggestions read the application's own `/proc/self/mountinfo`, without Docker-daemon access. This provides container mount targets, not reliable original host mappings or media type. Mac live view correctly reports unsupported suggestions. Actual Linux mount UI was not exercised.           |
+| SRC-02 | Confirmed placement/clarity issue. Before clicking Choose, the choices region count is zero, but Check directory, scope and lengthy explanations already show. Opening inserts choices after all of those controls rather than immediately under its trigger.                                                                                                 |
+| SRC-03 | Confirmed confusing grouping. Mapping/import review is existing association diagnostics plus completed metadata-import history, not reuse of a previous filesystem scan. Scan & refresh starts immediately from the source card; the live scan completed with two files, no errors and no dialog. A dedicated run/review modal is a proposed workflow change. |
+| SRC-04 | Confirmed complexity. Subtitle settings expose root, sample-check scope, comma-separated folder names, presets and a second numeric nesting depth. Discovery checks beside each video and configured subtitle folders/mirrored roots; the depth limits nested caption-folder traversal.                                                                       |
+| SRC-05 | Confirmed wording/grouping issue. Descriptive metadata uses adjacent NFO by default or a separate mirrored root, not the same subtitle search algorithm. Its repeated directory-check controls make that distinction harder to understand.                                                                                                                    |
+| SRC-06 | Partial capability, confirmed gap. Choose mapping roots already offers paired fields, but adds text into a manual `=>` textarea. Saving a nonexistent **local destination** returned 204 and persisted it. Provider-side roots cannot be checked by locally statting the Sonarr/Radarr path.                                                                  |
+| SRC-07 | Confirmed requested change: Configure contains five forms, including diagnostic sampling and four independent settings saves. Disconnect is separated from Save and appears even with no integration configured. One modal Save is not implemented.                                                                                                           |
+| SRC-08 | Confirmed. The bottom uses two equal-height columns: a long Sonarr form beside an untitled automatic-refresh form with substantial empty space. Both measured about 993px tall at desktop.                                                                                                                                                                    |
+
+Applicable global items: GLO-01/02/04/05/06/08 are visible here. GLO-10 was **not reproduced**: no style-CSP violations during these Sources journeys; the initial unauthenticated 401 is unrelated. Narrow width remained 390px without horizontal document overflow.
+
+## Ranked actionable findings
+
+No P0/P1 was confirmed in this pass.
+
+- **SRC-P1-01 — P2, owner UX:** Apply the shared directory selector/disclosure to Add/Edit Source, subtitle root and NFO root. Place expanded content directly under its trigger; name mount suggestions “Mounted folders” or similar, and distinguish Browse from Check. **Accept:** opening, loading, selecting and closing stay visually adjacent; closed choices reveal no choice list or unnecessary check options. Preserve explicit, bounded filesystem checks.
+- **SRC-P1-02 — P2, owner request + confirmed validation gap:** Replace textarea-first mappings with repeatable left/right rows and Add mapping. Validate changed local destinations server-side before reporting them valid. An actual save accepted `sourceRoot/does-not-exist`; current validation checks syntax/traversal/duplicate prefixes only (`src/refresh.ts:109`, `src/setup-suggestions.ts:314`). **Accept:** invalid local rows identify the problem inline; remote provider paths use explicit provider evidence/status rather than a local filesystem test. Decide offline-save behavior before implementation.
+- **SRC-P1-03 — P2, owner UX:** Move mapping diagnostics/import history into a dedicated Scan & refresh workflow, separating “Start a scan”, “Previous results” and optional mapping checks. **Accept:** users can tell which action starts HDD work, inspect outcomes, and avoid mistaking cached provider samples for live file validation (`web/src/Administration.tsx:291`).
+- **SRC-P1-04 — P2, owner UX:** Apply the shared sticky-header/footer modal to Sources configuration; use titled horizontal sections and a single settings Save/Cancel. The current Close scrolls out of view, and saves belong to different forms (`web/src/Management.tsx:780`). **Accept:** actions remain reachable at desktop/narrow sizes; save failures retain drafts and identify unsaved sections. Keep Scan/Check/Disconnect distinct from Save.
+- **SRC-P1-05 — P2, owner UX:** Simplify subtitle/NFO sections with plain summaries and optional advanced information. Present subtitle inclusion as an understandable folder scope, while retaining bounded internal traversal. **Accept:** users can distinguish the directory sample depth from subtitle-discovery scope and NFO mirroring. Unrestricted recursive caption searching is not an acceptable implicit default (`src/subtitle-catalog.ts:531` caps traversal at 100 directories; `web/src/Subtitles.tsx:199`).
+- **SRC-P1-06 — P3, additional UX:** Hide or disable Disconnect until an integration exists, then place it beside integration status as a secondary destructive action. **Accept:** an unconfigured source does not offer a meaningful-looking disconnect operation (`web/src/MetadataIntegration.tsx:368`).
+
+## Shared work and decisions
+
+**Global creation:** sticky modal/actions, accessible information popover, application confirmation, bounded directory selector.
+
+**Retain on Sources:** apply those components to source editing/configuration, directory choices, source removal, disconnect and destructive root/type changes. Keep Sources-specific wording and section titles as page tasks.
+
+Extra investigation should settle: one atomic database settings save versus explicit partial-success semantics; which scan options are per-run versus persistent; local offline-path saves; upstream validation evidence; and a simple subtitle folder scope that preserves HDD limits. No new API or deletion policy is decided by this report.
+
+**Cleanup:** both helpers closed their browsers and awaited fixture shutdown; port 19001 was no longer listening. Temporary synthetic data was removed by the fixture. No commit/push, package download or production change occurred.

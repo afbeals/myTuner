@@ -2,9 +2,9 @@
 
 ## Repository boundaries
 
-Work in this standalone checkout on `feature/standalone-foundation`. Its `AGENTS.md` excludes Pineapple/Airbnb conventions. Follow this project's npm/Node tooling. The earlier Python sidecar/proxy directories and legacy deployment files are preserved historical work; do not run their media-writing tools on the read-only standalone sources.
+Work in this standalone checkout on a feature branch; the current UI overhaul branch is `feature/ui-ux-overhaul`. The earlier `feature/standalone-foundation` branch name describes historical foundation work, not a required branch to switch to. Its `AGENTS.md` excludes Pineapple/Airbnb conventions. Follow this project's npm/Node tooling. The earlier Python sidecar/proxy directories and legacy deployment files are preserved historical work; do not run their media-writing tools on the read-only standalone sources.
 
-All current work remains local unless explicitly committed/published. Never add actual media, credentials, live database/key material, generated outputs or temporary test artifacts to Git. The owner approved Figma designs; version 0.2.0 implements browser and native TV clients.
+All current work remains local unless explicitly committed/published. Never add actual media, credentials, live database/key material, generated outputs or temporary test artifacts to Git. The owner approved Figma designs; the current browser/native projects are version 0.3.0, database schema 20. Earlier dated test/evidence sections retain their original build scope.
 
 ## Setup and scripts
 
@@ -31,15 +31,14 @@ Use Node 24.13+ within major 24, npm and FFmpeg/ffprobe. Install dependencies wi
 | `npm run docker:tag`                                                | Tag current version as latest; local mutation                               |
 | `npm run docker:push`                                               | Publish version and latest; deliberate external action                      |
 
-There is no separate ESLint/lint script in the current package; checks are strict TypeScript, formatting and behavioral tests. Browser functional/visual tests use Playwright; Android checks use Gradle. Before the first browser test run from the repository root:
+There is no separate ESLint/lint script in the current package; checks are strict TypeScript, formatting and behavioral tests. Browser functional/visual tests use Playwright; Android checks use Gradle. With the approved dependencies and Chromium already installed, run from the repository root:
 
 ```sh
 npm run build
-npx playwright install chromium
 npm run test:ui
 ```
 
-`npm ci` installs the test library but does not guarantee the Chromium executable is present. On Linux, use `npx playwright install --with-deps chromium` when system browser dependencies are also needed. Browser download/system package installation needs network access. See [CLIENTS.md](CLIENTS.md) for commands, modules and current limits.
+`npm ci` installs the test library but does not guarantee the Chromium executable is present. Installing host software/toolchains or downloading executables, browser binaries, SDK components or system dependencies requires explicit owner approval first. Routine verification reuses existing tooling and runs npm offline; it must not use `npx`/`npm exec` automatic installation to fill a missing tool. After separate approval on the intended host, `./node_modules/.bin/playwright install chromium` downloads the matching browser; Linux `--with-deps` additionally changes system dependencies. The hosted workflow provisions disposable CI runners separately and does not authorize installations on this Mac. See [CLIENTS.md](CLIENTS.md) and the pre-push procedure below.
 
 ## Local demo with mock data
 
@@ -122,7 +121,39 @@ Append schema migrations; never change a released migration to redefine old data
 
 Run relevant behavioral tests, strict type checking, formatting and build as appropriate. Use compiled smoke for runtime/CLI/recovery changes. `git diff --check` catches whitespace issues. For dependency changes, inspect the lockfile and run the production audit. Update the checklist and verification record with what actually ran and what remains untested.
 
-The supplied GitHub Actions workflow defines backend install/format/typecheck/tests/compiled smoke, macOS Chromium functional/visual checks and Android build/unit/lint jobs. Coverage and audit are available local checks. The workflow does not publish images or certify Docker/hardware. No remote CI result is implied before a push.
+The authoritative workflow is [`.github/workflows/backend.yml`](../.github/workflows/backend.yml). It runs the release-version check, backend format/typecheck/tests/compiled smoke, three macOS Chromium functional/visual shards plus their required aggregate check, Android build/unit/lint and **Docker acceptance**. The Docker job builds the Linux/amd64 candidate and executes `docker:test` on its disposable Ubuntu runner, uploading the acceptance report. It does not push/tag a registry release, deploy to Unraid or establish Windows/physical-TV acceptance. Coverage and audit are available additional local checks, not commands currently required by this workflow. No hosted result is implied until the matching commit’s jobs actually finish successfully.
+
+## Local checks before committing and pushing
+
+Use the already-installed Node 24, FFmpeg/ffprobe, dependencies and approved Chromium. Stop only owned disposable fixtures before rebuilding hashed browser assets; do not replace a build underneath an active browser test or demo. From the repository root on the Mac:
+
+```sh
+export npm_config_offline=true
+export npm_config_yes=false
+npm run docker:check -- --base origin/main
+npm run format:check
+npm run typecheck
+npm test
+npm run test:smoke
+npm run test:ui
+git diff --check
+```
+
+The version command needs the intended PR base in local Git history; replace `origin/main` with its exact already-present commit when appropriate. Hosted CI checks the PR’s actual base SHA. Do not claim an exact-base comparison if the local reference is stale or absent. `docker:check` is a package/version check and does not require or start Docker. `test:smoke` builds both server/browser and runs the compiled lifecycle/catalog smokes; the following browser run uses the matching build. Browser screenshots require human review when intentionally changed; do not accept baselines merely to remove a test failure.
+
+For Android, use only the existing approved Java/SDK/Gradle caches and run the same three tasks offline:
+
+```sh
+cd android
+./gradlew --offline --no-daemon :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+cd ..
+```
+
+Do not resume deferred emulator verification. If a required binary/cache is absent, record that local gate as unavailable and use the matching hosted job or seek the owner’s installation approval; a download is not an implicit repair step.
+
+The Mac currently has no authorized Docker installation. Do not run an installer to match CI. The owner’s existing Windows Docker Desktop can run `npm run docker:build` followed by `npm run docker:test`; CI runs those same commands on Ubuntu. Record which host actually ran them and review its acceptance report/skips. Neither route should run `docker:release`, `docker:push` or deploy as part of a pre-push check.
+
+After a PR is opened or updated, confirm the exact pushed commit passes **Release version**, **backend**, **Browser shard 1/3**, **Browser shard 2/3**, **Browser shard 3/3**, their **browser** aggregate, **android** and **Docker acceptance**. The aggregate rejects failed/cancelled/missing browser shards. Local success is not a substitute for these hosted results; CI success is not proof of actual Unraid/media/device behavior. Record commands, platform, results and any unavailable gates in VERIFICATION.md before describing the branch as verified.
 
 ## Client verification and remaining hardware acceptance
 
@@ -138,7 +169,7 @@ Current actual evidence is recorded in [VERIFICATION.md](VERIFICATION.md); remai
 - `npm run test:ui`: real-server Chromium journeys, accessibility and reviewed visual baselines.
 - `npm run test:ui:update`: intentionally regenerate visual baselines for review.
 - `cd android && ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug`: signed POC APK, JVM tests and Android lint.
-- `npm run test:tv`: remote-input emulator smoke; requires the disposable synthetic server and an installed emulator APK. For deterministic same-program recovery, start the fixture with `MYTUNER_E2E_PORT=8790 MYTUNER_E2E_LONG_EPISODES=1 npx tsx e2e/server.ts`, then run `MYTUNER_TV_TEST_SERVER=http://127.0.0.1:8790 MYTUNER_ADB=/path/to/adb npm run test:tv`. The script binds a temporary loopback fault proxy at 8789, enters `http://10.0.2.2:8789` on the emulator and forwards to the selected server. Keep 8789 free. It injects an initial join failure and polling outages, checks remote Retry, actual advancing delivery within the same entry, and preservation of intentional pause, then closes the proxy. The longer episodes are generated only in this explicitly selected disposable fixture. Stop that fixture afterward; normal browser/demo episodes stay short.
+- `npm run test:tv`: remote-input emulator smoke; requires the disposable synthetic server and an installed emulator APK. For deterministic same-program recovery, start the fixture with `MYTUNER_E2E_PORT=8790 MYTUNER_E2E_LONG_EPISODES=1 node --import tsx e2e/server.ts`, then run `MYTUNER_TV_TEST_SERVER=http://127.0.0.1:8790 MYTUNER_ADB=/path/to/adb npm run test:tv`. The script binds a temporary loopback fault proxy at 8789, enters `http://10.0.2.2:8789` on the emulator and forwards to the selected server. Keep 8789 free. It injects an initial join failure and polling outages, checks remote Retry, actual advancing delivery within the same entry, and preservation of intentional pause, then closes the proxy. The longer episodes are generated only in this explicitly selected disposable fixture. Stop that fixture afterward; normal browser/demo episodes stay short.
 
 ## Selected improvement regression coverage
 
@@ -247,3 +278,5 @@ Browser coverage runs as three Playwright file shards on separate macOS runners,
 Docker acceptance still builds and verifies its exact candidate with the normal script. CI reuses Buildx layers through an Actions cache keyed by Dockerfile, lockfile and commit, restoring recent compatible layers. Local/Windows use remains unchanged unless `MYTUNER_BUILD_CACHE_FROM` or `MYTUNER_BUILD_CACHE_TO` is explicitly set; their values are passed as individual Buildx arguments. Cached layers never replace acceptance, source-digest checks or the explicit publication gate. No hosted timing improvement is claimed until a run of this workflow completes.
 
 The existing `npm run test:smoke` gate now includes a compiled read-only catalog-worker smoke using isolated temporary SQLite data. `npm run test:catalog` builds the server and measures an 8,000-item synthetic mixed catalog through the compiled worker (no provider or media access). It reports warm/cold timings, sampled whole-process memory and main event-loop delay; fixture creation warms the OS cache, so use [Unraid checks](UNRAID_CHECKS.md) for target-host measurements. Both commands require the already-documented local dependencies, not additional tools.
+
+Reset's actual browser/offline CLI lifecycle regression runs with `npm run test:reset-lifecycle`. Its file is `test/reset-browser-lifecycle.check.ts`, deliberately outside the backend `*.test.ts` glob because it needs the existing installed Chromium. CI runs it once on browser shard 1 after the existing browser installation/build; the Ubuntu backend job does not acquire a new browser dependency. Local runs use the installed browser only and never install one implicitly. Other reset regressions run in the ordinary backend suite and use the platform temporary directory plus FFmpeg from PATH.

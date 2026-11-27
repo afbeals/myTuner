@@ -1,61 +1,72 @@
 # Create your first channel
 
-Use this walkthrough after [installing the server](UNRAID_DOCKER_TAB.md) and bootstrapping its first administrator. It takes an empty installation through browser playback, then TV setup. The [temporary demo](DEVELOPMENT.md#local-demo-with-mock-data) already has sources, profiles and a channel; use it to explore without your own media.
+Use this walkthrough after [installing the server through Unraid’s Docker tab](UNRAID_DOCKER_TAB.md) and creating its first administrator. It describes the 0.3.0 browser interface. The [temporary demo](DEVELOPMENT.md#local-demo-with-mock-data) already contains sources, profiles and a channel for inspection without household media.
 
 ## Before you start
 
-Open `http://<Unraid-LAN-IP>:<published-host-port>/` and sign in with the administrator you created. This is the myTuner login, separate from Unraid. Have one existing directory of readable videos available to the container. Sonarr/Radarr are optional; Plex is not required.
+Open `http://<Unraid-LAN-IP>:<published-host-port>/` and sign in with the administrator you created. This is the myTuner login, separate from Unraid. Select a viewing profile if prompted. Have an existing readable video directory mounted in the container. Sonarr/Radarr are optional; Plex is not required.
 
-For the examples, a host directory `/mnt/user/media` is mounted read-only as `/media`, with shows in `/media/shows`. Replace those examples with your actual mappings. A container cannot use an unmapped host path. Keep application data, generated outputs and cache outside all source directories.
+For example, an Unraid host directory `/mnt/user/media/media/tv` may be mounted read-only as `/tv`. In myTuner, use `/tv`, not the host path. Keep application data, generated outputs and cache outside all source directories.
 
 ## 1. Add and scan a source
 
-1. Open **Sources** and choose **Add source**.
-2. Give it a recognizable name, such as TV shows. Set **Container media path** to `/media/shows` in this example. Choose **TV shows · Sonarr optional**; use **Movies · Radarr optional**, **Custom videos** or **Commercials** for the corresponding directory. Leave **Include subfolders** selected when needed.
-3. Save, then choose **Scan & refresh metadata** for that source. Adding a source alone does not catalog its files.
-4. Review the result. A complete scan should have no unexplained errors and should find your expected files. If it finds nothing, check the container path, read permissions, supported file extensions and whether the directory is online. An incomplete scan is not proof that the missing files were deleted.
+1. Open **Sources → Add source**. Enter a recognizable name, such as TV shows.
+2. Set **Media directory inside MyTuner** to the container path, such as `/tv`. Mounted-directory suggestions and **Choose media directory** can help locate it; the folder picker opens only on request. **Check directory** performs a small read-only check of a typed path. It does not inspect every video or replace scanning.
+3. Choose the media type and whether to include subfolders, then choose **Add source**. Use separate sources for physically separate roots, such as regular TV and anime. Use folder selections within a source when channels should cover different subfolders; overlapping sources are unnecessary.
+4. If Sonarr/Radarr is used, open **Configure**, then choose **Connect Sonarr** or **Connect Radarr**. Enter the application address and API key. Add each paired path mapping: the left input is the path Sonarr/Radarr sees; the right input is the equivalent directory inside myTuner. For example, `/media_tv` → `/tv`. Choose **Save configuration** once after reviewing the sections.
+5. Choose **Scan & refresh metadata** on the source card. In the scan dialog, choose whether to refresh connected metadata and select **Start scan**. Review scan completeness/errors and provider matches separately. You may close the dialog while the server continues; reopening shows status.
 
-For Sonarr/Radarr metadata, save the matching integration for this source, including its URL, key and provider-to-container path mapping, then scan/refresh again. Follow [media discovery](MEDIA_DISCOVERY.md#path-mapping-the-common-integration-issue). Keep keys in the application, never in Git or screenshots. Without an integration, filename/local metadata and custom folders remain usable. This does not download or duplicate videos.
+A complete scan should find the expected files without unexplained errors. An incomplete scan does not prove missing files were deleted. Check the container path, mount/read permissions and supported extensions if results are empty. Saved API keys remain masked; mapping-only edits at the same application address can leave the key input blank. Changing provider/address requires an explicit key or a compatible saved connection. [Media discovery](MEDIA_DISCOVERY.md) explains ordering and mappings.
 
-Expected result: the source contains cataloged videos with measured durations. Bulk thumbnail/GIF/conversion generation is a separate optional action.
+Expected result: the source contains cataloged videos with measured durations. Scanning neither copies media nor starts optional thumbnail/GIF/conversion generation.
 
 ## 2. Create a profile and grant access
 
-1. Open **Profiles → Create profile**. Name it, for example Living Room. Choose a shared room or personal profile; assign the intended owner for a personal profile.
-2. Open **Manage Living Room**. Add the intended account under account access. Select **May manage this profile** only when that account should edit its programming; watching does not require management authority. Administrators create additional accounts in **Accounts**; there is no public signup.
-3. In **Allowed library**, choose the source and select **Add library grant**. Leave **Subfolder** blank for the entire source, or use **Browse subfolders** to search/select a scanned relative folder for narrower access. Manual entry remains available for folders not yet scanned. Add separate grants for other sources, including commercials if you want them later.
-4. Set the optional **TV PIN** and save it. PINs have 4–8 digits. The PIN protects viewing-profile selection; it is separate from the account password and does not grant library access.
-5. In the browser's **Current profile** selector, choose Living Room. Open **Library** and confirm its permitted content appears. If another account will approve the TV, that account must have access to this profile too.
+1. Open **Profiles → Create profile**. Name it, for example Living Room. Choose **Shared room** or **Personal**; a personal profile needs an owner. Administrators create login accounts in **Accounts**; there is no public signup.
+2. Choose **Manage Living Room**. In **Account access**, check the accounts permitted to use it. Only eligible editors need **Manage** permission. Owners/administrators have implicit access; a viewer remains a viewer even if they own a profile.
+3. In **Allowed library**, choose a source and **Choose folders**. Select its root for the entire source or select indexed subfolders for narrower access. Confirm the folder selection. Add other sources as needed, including a commercial source if commercials will be used later.
+4. In **TV PIN**, choose **Set PIN** and enter matching **New TV PIN** and **Confirm TV PIN** values. PINs have 4–8 digits. Leave the existing PIN unchanged when editing unrelated settings.
+5. Choose **Save profile** once in the footer. Membership, grants and PIN changes are staged until that save; Cancel discards them. If a conflict reports another edit, reopen and review the saved state before retrying.
+6. Choose Living Room as the current profile, then open **My Network** and confirm its permitted library appears. The account that approves a TV must also have access to this profile.
 
-An admin can inspect more than a household viewer. Before considering setup complete, verify playback using the intended viewer/account as well as the administrator.
+An administrator can inspect more than another household account. Verify the final viewing experience with the intended account too. A profile PIN protects selection of an already-permitted profile; it does not add source rights or reveal another account’s private channel.
 
-## 3. Create and program a channel
+## 3. Choose content in My Network
 
-1. Open **Channels**, choose **Create channel**, and enter its name. **Short name** is optional; blank derives a compact label from the name.
-2. Choose visibility deliberately. **Shared · household catalog** is available to an administrator and is the usual choice for a household channel watched by several accounts. **Private · only you and administrators** belongs to the creating account; another account cannot see or subscribe to it, even if it can use the same profile. An admin-created private channel is not a way to share content with a separate viewer.
-3. Choose **Create & program**. In the programming editor, use **Add content group** if no group exists. Choose **Change content selection** to open **Choose programming content**. Search by title or filename and narrow by source/type. Use **Select** for a whole show, folder, saved collection or individual video; **View seasons** opens season choices. A whole-show selection discovers its usable episodes for you; no manual episode-by-episode scheduling is required.
-4. For episodic shows, choose **Ordered · keep episode sequence**. Add other groups to alternate shows. Shuffle varies a rotation; random selection can repeat. Keep commercials off for this first test.
-5. Open the **Preview** tab, choose **Generate two-hour preview**, then review the actual upcoming programs. If it reports an empty/unavailable selection, return to scan/grant/library checks. A preview does not publish the channel.
-6. Choose **Publish programming**. The channel now has a saved timeline. On later edits, publication activates after the current program and its associated breaks; it does not interrupt the current airing. The editor distinguishes your draft, preview and saved programming. Channel-detail saves and commercial-rule application have their own controls; preview the final draft before publication.
+**My Network** places channels above **Your library**. A source indexes existing files. A collection saves a fixed set of video references. A channel schedules selections as a continuous broadcast. [The My Network guide](MY_NETWORK.md) explains the complete relationship.
 
-To rename an existing channel, choose **Edit details** in its row or channel preview. **Save channel details** immediately saves name, optional short name, description and visibility without preview/publication. **Edit programming** changes groups/commercials; its own **Edit details** action retains the open programming draft. Cancel/Close confirms unsaved details; a pending save may still complete after closing. For show/movie/video information, open **Library → Open details → Edit information**. Choose the source independently for title and description: automatic, Sonarr/Radarr, local metadata file or manual input. **Check metadata files** reads existing NFO files; it does not create sidecars. Configure a separate read-only descriptive metadata directory under **Sources → Configure → Read-only metadata location** when needed. Review availability and save the chosen values. See [metadata editing](METADATA_EDITING.md).
+For a whole show, season, folder or existing collection, use the channel wizard’s programming picker in the next step. Whole-show/folder choices can include newly discovered files later, avoiding manual episode scheduling.
 
-The picker and programming/commercial controls share the same retained draft. Full state/frame, assistive-technology and physical-device acceptance remain separately tracked in [the checklist](CHECKLIST.md).
+For selected episodes or custom videos, open a library card, check the exact videos, then use the **Add … videos to tray** footer button. **Select all on this page** affects the current loaded page, not every video on the server. You can add more from other cards/searches. Create a reusable collection from the tray, or choose **Create channel from tray** for a fixed explicit selection. The tray contains references only, is limited to 5,000 videos, and clears when its profile/context is discarded. Original files stay where they are.
 
-## 4. Subscribe and watch in the browser
+## 4. Create and preview the channel
 
-1. Open **Subscriptions** with Living Room selected. Find the channel and choose **Subscribe**. Creating a channel and subscribing a profile are separate actions.
-2. Open **Watch TV**, select the channel, then **Watch live**. Playback joins the current point in the shared broadcast. The first episode may already be partway through because the channel advances even with no viewers.
-3. Try **Pause**, **Resume** and **Go Live**. Pause affects only this playback session; Go Live returns it to the current broadcast. Confirm the expected picture and sound before installing on the TV.
+1. In **My Network**, choose **Create channel** or **Create channel from tray**.
+2. **Channel details:** enter the name, optional short name and description. Blank short name derives a label from the name. Choose visibility deliberately: **Private · you and administrators** belongs to the creating account; **Shared · available to permitted profiles** is an administrator option. Sharing still does not grant media access.
+3. **Programming:** add content groups and use **Choose programming content** to choose shows, seasons, folders, collections or individual files. Select a result, then **Use selection** to apply it to the group. Use **Ordered** for episode sequence, or a shuffle/random mode when appropriate. Multiple groups can alternate. Choose **Next** to continue.
+4. **Commercials (optional):** leave commercials disabled for the first test. This step may be revisited before submission.
+5. **Preview and create:** choose **Generate preview**, review the upcoming programs and duration display, then choose **Create channel**. The server creates the channel and publishes its initial programming together. An empty/unavailable selection needs correction before creation. A preview alone saves no channel.
 
-If the channel is absent, check visibility/ownership, profile membership, source grants, publication and subscription in that order. A subscription never grants access to otherwise hidden content. If the browser works but the TV cannot connect, check the TV-to-server network path separately.
+Back returns to earlier steps without losing the draft. Changing the draft or catalog can invalidate a preview; generate a fresh one when asked. Cancel discards the unsaved new channel. After successful creation, an uncertain repeated final request uses the same draft identity to avoid duplicating it.
 
-## 5. Load the TV app
+For an existing channel, **Edit details** saves name, short name, description and visibility independently. **Edit programming** retains the existing editor’s preview/publication flow. Programming edits activate after the current program and its related breaks, preserving paused viewers’ retained revisions. Archiving removes subscriptions; restoration does not resubscribe profiles. Permanent deletion is available only when dependency checks permit it; retained schedules/history are not silently erased.
 
-Follow [TV installation and connection](TV_INSTALLATION.md) for the Bravia/Google TV APK or Android-based Fire OS stick. Enter the same server's reachable LAN origin, approve the exact TV code from a browser signed in as the intended account, then select Living Room and enter its PIN. Its subscribed channel should appear in the guide.
+## 5. Subscribe and watch in the browser
 
-A successful desktop/browser test does not prove that an IoT network can reach Unraid or that the TV supports every media format. Exact-device/network acceptance remains required.
+1. Open **Profiles**, then **Subscriptions for Living Room** beside Manage. Check the eligible channel and arrange the selected lineup if desired. Choose **Save subscriptions**. Creating a channel and subscribing a profile remain separate actions. The older Subscriptions link still opens the same modal workflow.
+2. Open **Watch TV**, choose Living Room and the channel, then **Watch live**. Playback joins the current point in its broadcast; the first episode may already be underway because channels advance without viewers.
+3. Try **Pause**, **Resume**, **Go Live**, volume/mute, and the available audio/subtitle controls. Pause affects only this playback session. Resume stays behind live; Go Live rejoins the broadcast. Track choices depend on the file and supported formats. See [audio/subtitle setup](SUBTITLES.md).
 
-## Add commercials or another source later
+If the channel is absent, check visibility/ownership, profile membership, source grants, publication and subscription. A shared room does not make another user’s private channels visible. An admin-added subscription cannot bypass that rule. Browser success does not establish TV-to-server networking or decoding compatibility.
 
-Store each commercial as its own existing file in a separate commercial source, scan it, and grant the profile access. The channel's **Commercials** tab selects its pool and timing/repeat rules. Apply the rules, preview, then publish. Cutoff mode can shorten an eligible ad to the remaining break budget; the default six-second minimum skips tiny remaining breaks and returns to the show. Source files remain unchanged. [Commercial timing](SCHEDULING_AND_PLAYBACK.md#cutoff-mode-and-minimum-remaining-time) and [the synthetic demo exercise](DEVELOPMENT.md#try-a-cutoff-commercial-in-the-demo) explain the controls.
+## 6. Load and connect the TV app
+
+Follow [TV installation and connection](TV_INSTALLATION.md) for Sony Bravia Android/Google TV first, or an Android-based Fire OS stick. Install the compatible signed APK, enter the reachable server origin, approve the exact displayed TV code from a browser signed in as the intended account, then select Living Room and enter its PIN. Its subscribed channels appear in the guide.
+
+The TV/stick needs network access to the published myTuner port; it does not mount media shares or connect directly to Sonarr/Radarr. Exact model/OS, household media and network acceptance remain required.
+
+## Add commercials and edit information later
+
+Keep each commercial as its own existing file, mount the commercial source read-only, scan it and grant the profile access. Configure its pool/timing/repeat rules in the wizard or existing channel’s Commercials editor, then preview and create/publish. Cutoff mode can shorten an eligible clip to the remaining break budget; the default six-second minimum skips tiny remaining breaks and returns to the show. Original files remain unchanged. See [commercial timing](SCHEDULING_AND_PLAYBACK.md#cutoff-mode-and-minimum-remaining-time).
+
+For descriptions and titles, open the show/movie/video in **My Network → Your library**, then **Edit information**. Choose each field’s source independently: Automatic, Sonarr/Radarr, an existing local NFO file or manual input. Configure a separate metadata directory through **Sources → Configure → Metadata** if needed. **Check metadata files** reads existing files; it writes no sidecars. See [metadata editing](METADATA_EDITING.md).

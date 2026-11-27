@@ -707,5 +707,24 @@ export function inspectAuthorizedMetadata(
   target: MetadataTarget,
 ) {
   authorized(store, actor, profileId, target);
-  return inspectMetadata(store, target);
+  const info = inspectMetadata(store, target);
+  const previous = info.requiresReview
+    ? store.db
+        .prepare(
+          "SELECT identity,state_json,checked_ms FROM display_metadata WHERE target_key=?",
+        )
+        .get(metadataTargetKey(target))
+    : undefined;
+  return {
+    ...info,
+    retained: previous
+      ? {
+          choices: metadataChoicesSchema.parse(
+            JSON.parse(String(previous.state_json)),
+          ),
+          identity: String(previous.identity),
+          checkedMs: previous.checked_ms ?? null,
+        }
+      : null,
+  };
 }

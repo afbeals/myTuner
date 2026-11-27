@@ -1,6 +1,16 @@
+import { randomUUID } from "node:crypto";
+import {
+  selectInitialProfile,
+  openProgrammingDraft,
+  respondToNextConfirmation,
+} from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8786" });
+test.afterEach(async ({ page }) => {
+  // Finish intercepted responses before Playwright disposes their request context.
+  await page.unrouteAll({ behavior: "wait" });
+});
 async function get(page: Page, path: string) {
   return page.evaluate(async (path) => {
     const r = await fetch(path);
@@ -38,6 +48,7 @@ async function setup(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -101,23 +112,27 @@ test("collection editing retains identity and unavailable selections across sear
     `/api/profiles/${f.profileId}/collections`,
     "POST",
     {
+      creationId: randomUUID(),
       name: "Phase retained collection",
       mediaIds: f.items.map((m: { id: string }) => m.id),
     },
   );
-  await page.route(`**/collections/${c.id}`, async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    const r = await route.fetch();
-    const data = await r.json();
-    data.items[0].available = false;
-    await route.fulfill({ response: r, json: data });
+  await page.route("**/selection?includeUnavailable=true*", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const data = await response.json();
+    data.items = data.items.map((item: { id: string; available: boolean }) => ({
+      ...item,
+      available: item.id === f.items[0].id ? false : item.available,
+    }));
+    await route.fulfill({ response, json: data });
   });
   await page.goto("/#library");
   await page.getByRole("button", { name: "Collections", exact: true }).click();
   await page
     .getByRole("article")
     .filter({ hasText: "Phase retained collection" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await page
     .getByRole("button", { name: "Edit collection", exact: true })
@@ -126,11 +141,14 @@ test("collection editing retains identity and unavailable selections across sear
   await expect(editor).toContainText("Unavailable · retained");
   await editor.getByLabel("Collection name").fill("Phase renamed collection");
   await editor.getByLabel("Find videos").fill("no-such-video");
+  await editor
+    .getByRole("button", { name: "Search videos", exact: true })
+    .click();
   await expect(editor).toContainText("No matching videos");
   await expect(
     editor.getByRole("region", { name: "Selected videos" }),
   ).toContainText("2 selected");
-  page.once("dialog", (d) => d.dismiss());
+  await respondToNextConfirmation(page, false);
   await page.keyboard.press("Escape");
   await expect(editor).toBeVisible();
   await page.route(`**/collections/${c.id}`, (route) =>
@@ -162,18 +180,28 @@ test("collection editing retains identity and unavailable selections across sear
     f.items.map((m: { id: string }) => m.id).sort(),
   );
 });
-test("bounded picker, turn counts and checkpoint commands share one draft with unapplied commercial inputs", async ({
+test("bounded picker, turn counts and checkpoint commands share one draft with immediate commercial updates", async ({
   page,
 }) => {
-  await setup(page);
-  await page.getByRole("button", { name: "Create channel" }).click();
-  await page
-    .getByLabel("Channel name", { exact: true })
-    .fill("Phase programming proof");
-  await page.getByRole("button", { name: "Create & program" }).click();
-  const editor = page.getByRole("dialog", {
-    name: "Program Phase programming proof",
+  const f = await setup(page);
+  const sources = await get(page, "/api/sources");
+  let ads = sources.find(
+    (source: { kind: string }) => source.kind === "commercials",
+  );
+  if (!ads) {
+    ads = await mutate(page, "/api/sources", "POST", {
+      name: "Synthetic commercials",
+      kind: "commercials",
+      root: f.source.rootPath.replace(/\/media$/, "/commercials"),
+      recursive: true,
+    });
+    await mutate(page, `/api/sources/${ads.id}/scan`, "POST", {});
+  }
+  await mutate(page, `/api/profiles/${f.profileId}/grants`, "POST", {
+    sourceId: ads.id,
+    subtree: "",
   });
+  const editor = await openProgrammingDraft(page, "Phase programming proof");
   await editor.getByRole("button", { name: "Add content group" }).click();
   const picker = page.getByRole("dialog", {
     name: "Choose programming content",
@@ -188,44 +216,62 @@ test("bounded picker, turn counts and checkpoint commands share one draft with u
       exact: true,
     })
     .click();
+  await picker
+    .getByRole("button", { name: "Use selection", exact: true })
+    .click();
   await editor
-    .getByRole("combobox", { name: "Episodes per turn" })
+    .getByRole("combobox", { name: "Videos per turn" })
     .selectOption("2");
-  page.once("dialog", (d) => d.accept());
+  await respondToNextConfirmation(page);
   await editor
     .getByRole("button", { name: "Restart group", exact: true })
     .click();
   await expect(editor).toContainText("Draft: restart");
   await editor
-    .getByRole("combobox", { name: "Rotation", exact: true })
+    .getByRole("combobox", { name: "Play order", exact: true })
     .selectOption("shuffle");
   await editor
-    .getByRole("combobox", { name: "Rotation", exact: true })
+    .getByRole("combobox", { name: "Play order", exact: true })
     .selectOption("ordered");
   await expect(editor).toContainText(
     "Continue this group from its saved position",
   );
   await editor
-    .getByRole("button", { name: "Commercials", exact: true })
+    .getByRole("button", { name: "2. Commercials", exact: true })
     .click();
-  const minimum = editor.getByLabel(
-    "Minimum remaining time to start a commercial (seconds)",
+  await editor.getByLabel("Commercial pool", { exact: true }).selectOption(
+    JSON.stringify({
+      type: "folder",
+      sourceId: ads.id,
+      directory: "",
+      recursive: true,
+    }),
   );
+  const minimum = editor.getByLabel("Minimum remaining break time (seconds)");
   await minimum.fill("7");
-  await editor.getByRole("button", { name: "Content", exact: true }).click();
+  await editor.getByRole("button", { name: "1. Content", exact: true }).click();
   await editor
-    .getByRole("button", { name: "Commercials", exact: true })
+    .getByRole("button", { name: "2. Commercials", exact: true })
     .click();
   await expect(minimum).toHaveValue("7");
-  await editor.getByRole("button", { name: "Preview", exact: true }).click();
+  const positions = editor.getByLabel("Break positions", { exact: true });
+  await positions.fill("not-a-position");
+  await expect(editor.getByRole("alert")).toContainText(
+    "Enter comma-separated numbers",
+  );
+  await editor.getByRole("button", { name: "3. Preview", exact: true }).click();
   await expect(
     editor.getByRole("button", { name: "Generate two-hour preview" }),
   ).toBeDisabled();
   await editor
-    .getByRole("button", { name: "Commercials", exact: true })
+    .getByRole("button", { name: "2. Commercials", exact: true })
     .click();
-  await editor.getByRole("button", { name: "Apply commercial rules" }).click();
-  await editor.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(positions).toHaveValue("not-a-position");
+  await positions.fill("");
+  await editor.getByRole("button", { name: "3. Preview", exact: true }).click();
+  await expect(
+    editor.getByRole("button", { name: "Generate two-hour preview" }),
+  ).toBeEnabled();
   await editor
     .getByRole("button", { name: "Generate two-hour preview" })
     .click();
@@ -244,38 +290,72 @@ test("bounded picker, turn counts and checkpoint commands share one draft with u
   expect(saved.config.checkpointActions).toBeUndefined();
   expect(saved.config.rules.minRemainingMs).toBe(7000);
 });
-test("copy creates an independent private unpublished channel and loads its programming draft", async ({
+test("copy stays local through preview, then creates an independent private published channel", async ({
   page,
 }) => {
   const f = await channel(page, "Phase copy origin");
+  const before = await get(page, "/api/admin/channels");
   await page.goto(`/#channels?profile=${f.profileId}&channel=${f.ch.id}`);
-  await page.getByRole("button", { name: "Create from this channel" }).click();
-  const modal = page.getByRole("dialog", {
-    name: "Copy channel into a new draft",
+  await page
+    .getByRole("button", { name: "Create from this channel", exact: true })
+    .click();
+  const wizard = page.getByRole("dialog", {
+    name: "Create channel from existing programming",
+    exact: true,
   });
-  await expect(modal.getByRole("combobox", { name: "Visibility" })).toHaveCount(
-    0,
+  await expect(wizard.getByLabel("Visibility", { exact: true })).toHaveValue(
+    "private",
   );
-  await modal
+  await wizard
     .getByLabel("Channel name", { exact: true })
     .fill("Phase private copy");
-  await modal.getByRole("button", { name: "Create & program" }).click();
-  const editor = page.getByRole("dialog", {
-    name: "Program Phase private copy",
-  });
-  await expect(editor).toContainText("Content group 1");
-  await expect(editor).toContainText("Unsaved draft");
-  const rows = await get(page, "/api/admin/channels");
-  const copy = rows.items.find(
-    (c: { name: string }) => c.name === "Phase private copy",
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(wizard).toContainText("Content group 1");
+  await expect(
+    wizard.getByRole("combobox", { name: "Group 1 play order", exact: true }),
+  ).toHaveValue("ordered");
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard
+    .getByRole("button", { name: "Generate preview", exact: true })
+    .click();
+  await expect(wizard.getByRole("table")).toBeVisible();
+  expect((await get(page, "/api/admin/channels")).items).toHaveLength(
+    before.items.length,
   );
+  expect(
+    (await get(page, "/api/admin/channels")).items.find(
+      (item: { name: string }) => item.name === "Phase private copy",
+    ),
+  ).toBeUndefined();
+  await wizard
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
+  await expect(wizard).not.toBeVisible();
+  const rows = await get(page, "/api/admin/channels"),
+    copy = rows.items.find(
+      (item: { name: string }) => item.name === "Phase private copy",
+    );
+  expect(rows.items).toHaveLength(before.items.length + 1);
   expect(copy.id).not.toBe(f.ch.id);
   expect(copy.visibility).toBe("private");
+  const programming = await get(page, `/api/channels/${copy.id}/programming`);
+  expect(programming.revisionId).toBeTruthy();
+  expect(programming.config.groups[0].selection).toEqual(
+    f.config.groups[0].selection,
+  );
   expect(
-    (await get(page, `/api/channels/${copy.id}/programming`)).revisionId,
-  ).toBeNull();
-  page.once("dialog", (d) => d.accept());
-  await editor.getByRole("button", { name: "Close dialog" }).click();
+    (await get(page, `/api/channels/${f.ch.id}/programming`)).config.groups[0]
+      .selection,
+  ).toEqual(f.config.groups[0].selection);
+  expect(
+    (
+      await get(
+        page,
+        `/api/profiles/${f.profileId}/subscription-configuration?limit=50`,
+      )
+    ).order.some((item: { id: string }) => item.id === copy.id),
+  ).toBe(false);
 });
 test("setup, health, effective access and backup recovery instructions are usable", async ({
   page,
@@ -308,7 +388,7 @@ test("setup, health, effective access and backup recovery instructions are usabl
         sourceGrants: 1,
         publishedChannels: 1,
         subscriptions: 1,
-        pairedDevices: 0,
+        pairedDevices: 1,
       },
     });
   });
@@ -319,6 +399,11 @@ test("setup, health, effective access and backup recovery instructions are usabl
   await expect(
     page.getByRole("heading", { name: "Application backups" }),
   ).toBeVisible();
+  const completedSetup = page.locator("details").filter({
+    has: page.getByText("Setup checklist · completed", { exact: true }),
+  });
+  await expect(completedSetup).not.toHaveAttribute("open");
+  await completedSetup.locator("summary").click();
   await expect(
     page.getByText("Custom folders work on their own.", { exact: false }),
   ).toBeVisible();
@@ -338,7 +423,13 @@ test("setup, health, effective access and backup recovery instructions are usabl
     .locator("..")
     .getByRole("button", { name: "Manage Living Room", exact: true })
     .click();
-  const inspect = page.getByRole("combobox", { name: "Inspect account" });
+  await page
+    .getByText("Check an account’s saved access", { exact: true })
+    .click();
+  const inspect = page.getByRole("combobox", {
+    name: "Inspect account",
+    exact: true,
+  });
   await inspect.selectOption({ label: "other · editor" });
   await expect(
     page.getByText("Profile viewing denied", { exact: false }),
@@ -353,9 +444,10 @@ test("setup, health, effective access and backup recovery instructions are usabl
     .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
     .analyze();
   expect(results.violations).toEqual([]);
-  await page.goto("/#setup");
+  await respondToNextConfirmation(page);
+  await page.goto("/#setup?topic=recovery");
   await expect(
-    page.getByRole("heading", { name: "Back up and recover the application" }),
+    page.getByRole("heading", { name: "Back up and restore", exact: true }),
   ).toBeVisible();
 });
 test("caption failure keeps video and controls running; language preferences and browse preserve the session", async ({
@@ -431,7 +523,7 @@ test("library inspection retains missing episodes but prevents selecting them", 
 }) => {
   const f = await setup(page);
   let unavailable = false;
-  await page.route("**/selection?includeUnavailable=true", async (route) => {
+  await page.route("**/selection?includeUnavailable=true*", async (route) => {
     const response = await route.fetch();
     // Setup mutations rotate CSRF. Let the client perform its normal token retry.
     if (!response.ok()) return route.fulfill({ response });
@@ -448,7 +540,7 @@ test("library inspection retains missing episodes but prevents selecting them", 
   await page
     .getByRole("article")
     .filter({ hasText: "Orbit Patrol" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   const inspector = page.getByRole("dialog", {
     name: "Orbit Patrol",
@@ -462,13 +554,13 @@ test("library inspection retains missing episodes but prevents selecting them", 
   await expect(missing.getByRole("checkbox")).toBeDisabled();
   await expect(
     inspector.getByRole("checkbox", {
-      name: `Select ${f.items[1].title}`,
+      name: `Select ${f.items[1].title} · ${f.source.name} · ${f.items[1].relativePath}`,
       exact: true,
     }),
   ).toBeEnabled();
   await expect(
     inspector.getByRole("button", {
-      name: "Use whole selection in a channel",
+      name: "Program this whole show or season in a channel",
       exact: true,
     }),
   ).toBeEnabled();
@@ -478,13 +570,13 @@ test("library inspection retains missing episodes but prevents selecting them", 
     .selectOption("1");
   await expect(
     inspector.getByRole("checkbox", {
-      name: `Select ${f.items[1].title}`,
+      name: `Select ${f.items[1].title} · ${f.source.name} · ${f.items[1].relativePath}`,
       exact: true,
     }),
   ).toBeDisabled();
   await expect(
     inspector.getByRole("button", {
-      name: "Use whole selection in a channel",
+      name: "Program this whole show or season in a channel",
       exact: true,
     }),
   ).toBeDisabled();

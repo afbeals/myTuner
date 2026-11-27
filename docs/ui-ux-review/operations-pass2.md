@@ -1,0 +1,30 @@
+# Setup & server health — independent second pass
+
+Route `#operations`; base `a67d418cf7258e669b11fcc9cae63cdc1bcda92d`. Investigation only, synthetic admin fixture on port 19023. Viewed desktop 1440×1000 and narrow 390×844 screenshots. Independent live notes were recorded before any earlier page findings; no pass-1/master/targeted report was read.
+
+Evidence: `/private/tmp/mytuner-ui-review/operations-p2/`: `desktop.png`, `narrow.png` (both viewed), matching ARIA snapshots, `refresh-loading.png`, `refresh-error.png`, `injected-empty-low-storage.png`, `independent-observations.txt`, `browser-events.json`, `server.log`. The failure and empty/low-storage responses were browser-route injections, not actual disk failures. An exploratory nonexistent `/api/operations` request produced an intentional 404; the actual dashboard reads `/api/admin/status` and `/api/admin/setup`.
+
+## Current behavior and scope
+
+The normal overview supplies a seven-step setup checklist with links to existing management pages, source refresh/import timestamps, database/storage state, backup status, generation counts and channel coverage. It correctly explains that readiness counts are server-wide and do not establish the selected profile’s readiness, physical-TV health or measured playback. Custom sources work without Sonarr/Radarr. The default fixture has readable sources, no jobs/backups and unknown generated/cache storage. At 390px the sections stack cleanly and document width remains 390px; checklist links wrap without clipping. The menu and profile selector remain usable.
+
+Refresh invokes both reads. Delayed status responses expose a Loading status; the refresh button remains active. A synthetic 503 displays the supplied error and Try again, while setup remains available. Retry recovered after removing the injection. An injected zero-count setup correctly turns every step into To do; empty sources/schedules/jobs show explicit messages. Unknown backup and low storage render as text. No nested page modal exists. No real backup, scan, generation or media operation was run.
+
+## Ranked findings and additional recommendations
+
+- **OPS2-01 · P2 · additional UX — retain useful diagnostic context during refresh.** With a delayed or failed status refresh, all previously rendered status sections disappear because the remote hook clears its data. The setup checklist remains, but the operator loses the last-known source/coverage/backup evidence precisely when investigating an outage. Keep the last successful overview visible, clearly mark its timestamp/staleness, and place Loading/error plus Retry near Refresh. Never preserve stale private information across account changes. **Accept:** delay and then fail a refresh; last-known values remain labelled, error is announced, retry updates them, and only one refresh is pending.
+- **OPS2-02 · P2 · additional UX — make degraded/unknown storage actionable.** Default unknown storage says `generated: unknown · Free: Unknown`; injected low storage says `generated: low · Free: 0.00 GiB`. These use implementation names and provide no next diagnostic step. Show readable storage labels, distinguish unconfigured from failed/timed-out checks where the server knows that distinction, and link to safe operator guidance. Preserve unknown rather than claiming zero capacity. **Accept:** healthy/low/unknown/unconfigured examples are distinguishable without color and each actionable failure has guidance; no source write probe is added.
+- **OPS2-03 · P3 · owner-request refinement — reduce repetitive support text.** Each source repeats multiple Not recorded fields and “manual checks only”; backup internals occupy substantial narrow-screen space. Keep essential “No completed backup”, manual cadence and offline restore consequences visible; disclose deeper CLI/key/bundle explanation through accessible information/details. **Accept:** keyboard/touch users can expand the explanation, while current state, next action and safety consequences remain immediately visible.
+- **OPS2-04 · P3 · additional UX — strengthen scan order.** The long readiness checklist consumes most of the initial mobile screen before unknown storage and missing backup appear. Add a compact health summary and a link to the first incomplete setup step; retain the full checklist. **Accept:** missing backup/degraded checks and the next setup task can be identified before reading every completed step. Do not imply setup incompleteness is server failure.
+
+No P0/P1 issue was confirmed. Server-wide readiness is explicitly disclosed, so this pass does not classify the selected profile selector as evidence that readiness is profile-specific.
+
+## Owner coverage, shared work and decisions
+
+Applicable IDs: GLO-03 (ordering remains a global navigation decision; this page’s title is correctly capitalized), GLO-04 (refine diagnostic language), GLO-05 (optional explanations), GLO-06 (clear Refresh hierarchy and responsive stacking). GLO-01/02/07/08/09/10/11 have no page-specific modal/picker/player/confirmation/search/duration requirement here; no CSP violation was observed. No unique operations owner ID exists.
+
+**Global construction:** reusable last-known-data/loading/error treatment; readable health-state presentation; accessible optional-information control. **Page adoption:** apply retained refresh state to both overview reads, apply status presentation to storage/source/backup rows, and apply information disclosure to the backup explanation. Do not create page-specific duplicates.
+
+Supporting code: `web/src/Administration.tsx:48`–OperationsPage, `:64`–Refresh, `:111`–status rendering, `:148`–storage/backups; `web/src/ui.tsx:177`–useRemote clearing data; `src/operations.ts:38`–15-second cached reads, `:82`–bounded storage checks. Preserve bounded source checks and operator-triggered offline recovery. A force-refresh bypass is a product/performance decision, not assumed: the current cache window is explicitly disclosed.
+
+Cleanup: browser and isolated fixture closed via `r.close()`; no application, test, baseline, version or deployment edits; no install/build/provider/media access.

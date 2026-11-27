@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect } from "@playwright/test";
 
 test("library refresh returns to a valid page when the catalog shrinks", async ({
@@ -9,9 +10,15 @@ test("library refresh returns to a valid page when the catalog shrinks", async (
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
+  // The legacy Library and Channels hashes now share one Network mount.
+  await page.goto("/#profiles");
+  await expect(
+    page.getByRole("heading", { name: "Profiles", exact: true }),
+  ).toBeVisible();
   let shrunk = false;
   const sourceId = "11111111-1111-4111-8111-111111111111";
   await page.route("**/api/profiles/*/library?*", async (route) => {

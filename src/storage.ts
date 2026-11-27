@@ -1,3 +1,8 @@
+import {
+  assertOutputCleanupAllowed,
+  assertSafeOutputRoot,
+  readOnlySourceRoots,
+} from "./storage-safety.js";
 import { readdir, lstat, statfs, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Store } from "./database.js";
@@ -107,25 +112,11 @@ export async function validateStorage(
   generated: string,
   cache: string,
 ) {
-  const columns = store.db.prepare("PRAGMA table_info(sources)").all();
-  const extra = ["metadata_root", "subtitle_root"].filter((name) =>
-    columns.some((c) => c.name === name),
-  );
-  const sources = store.db
-    .prepare(
-      [
-        "SELECT root_path FROM sources",
-        ...extra.map(
-          (name) =>
-            `SELECT ${name} AS root_path FROM sources WHERE ${name} IS NOT NULL`,
-        ),
-      ].join(" UNION "),
-    )
-    .all();
+  const sources = readOnlySourceRoots(store);
   for (const root of roots) {
     const path = await canonicalPath(root);
     for (const source of sources) {
-      const src = await canonicalPath(String(source.root_path));
+      const src = await canonicalPath(source);
       invariant(
         !containsPath(src, path) && !containsPath(path, src),
         409,
@@ -144,6 +135,8 @@ export async function validateStorage(
   );
 }
 export async function cleanupAssets(store: Store, root: string, dryRun = true) {
+  assertSafeOutputRoot(store, root);
+  if (!dryRun) assertOutputCleanupAllowed(store);
   const rows = store.db
     .prepare(
       "SELECT a.id AS asset_id,a.kind,a.fingerprint,a.relative_path AS asset_path,m.* FROM generated_assets a JOIN media m ON m.id=a.media_id",
@@ -160,6 +153,7 @@ export async function cleanupAssets(store: Store, root: string, dryRun = true) {
   let removed = 0;
   for (const row of candidates) {
     if (!dryRun) {
+      assertOutputCleanupAllowed(store);
       try {
         const path = await safeMediaPath(
           {
@@ -168,6 +162,8 @@ export async function cleanupAssets(store: Store, root: string, dryRun = true) {
           },
           row.asset_path,
         );
+        assertSafeOutputRoot(store, root);
+        assertOutputCleanupAllowed(store);
         await rm(path);
       } catch (e) {
         if (!(e instanceof Error && "code" in e && e.code === "ENOENT"))

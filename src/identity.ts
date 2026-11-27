@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Store } from "./database.js";
 import type { Account } from "./domain.js";
 import { invariant } from "./domain.js";
@@ -81,6 +81,7 @@ export function updateAccount(
   const role = input.role ?? current.role,
     disabled =
       input.disabled === undefined ? current.disabled : Number(input.disabled);
+  if (role === current.role && disabled === current.disabled) return;
   store.transaction(() => {
     if (
       current.role === "admin" &&
@@ -255,7 +256,8 @@ export class PairingService {
         .prepare(
           "SELECT * FROM device_pairings WHERE device_hash=? AND expires_ms>? AND consumed=0",
         )
-        .get(hash, now) as { account_id: string | null } | undefined;
+        .get(hash, now) as
+        { account_id: string | null; device_name: string } | undefined;
       invariant(pairing, 404, "Pairing request unavailable");
       if (!pairing.account_id) return { status: "pending" };
       invariant(
@@ -268,13 +270,91 @@ export class PairingService {
       const token = randomBytes(32).toString("base64url");
       this.store.db
         .prepare(
-          "INSERT INTO sessions(token_hash,account_id,expires_at,kind) VALUES(?,?,?,'device')",
+          "INSERT INTO sessions(token_hash,account_id,expires_at,kind,label,created_ms,last_used_ms) VALUES(?,?,?,'device',?,?,?)",
         )
-        .run(digest(token), pairing.account_id, now + 30 * 86400000);
+        .run(
+          digest(token),
+          pairing.account_id,
+          now + 30 * 86400000,
+          pairing.device_name,
+          now,
+          now,
+        );
       this.store.db
         .prepare("UPDATE device_pairings SET consumed=1 WHERE device_hash=?")
         .run(hash);
       return { status: "approved", token };
     });
   }
+}
+
+export function accountConfiguration(store: Store, actor: Account, id: string) {
+  requireAdmin(actor);
+  const row = store.db
+    .prepare(
+      "SELECT id,username,role,disabled,password_hash FROM accounts WHERE id=?",
+    )
+    .get(id);
+  invariant(row, 404, "Account not found");
+  const revision = createHash("sha256")
+    .update(JSON.stringify([row.id, row.role, row.disabled, row.password_hash]))
+    .digest("hex");
+  return {
+    id: String(row.id),
+    username: String(row.username),
+    role: String(row.role),
+    disabled: Boolean(row.disabled),
+    revision,
+  };
+}
+export async function saveAccountConfiguration(
+  store: Store,
+  actor: Account,
+  id: string,
+  input: {
+    revision: string;
+    role: Account["role"];
+    disabled: boolean;
+    password?: string | undefined;
+  },
+) {
+  requireAdmin(actor);
+  const previous = accountConfiguration(store, actor, id);
+  invariant(
+    previous.revision === input.revision,
+    409,
+    "Account changed elsewhere; reopen and review your changes",
+  );
+  invariant(
+    input.password === undefined ||
+      (input.password.length >= 12 && input.password.length <= 1024),
+    400,
+    "Password must contain 12–1024 characters",
+  );
+  const hash =
+    input.password === undefined ? null : await hashSecret(input.password);
+  const currentActor = refreshAccount(store, actor);
+  requireAdmin(currentActor);
+  return store.transaction(() => {
+    invariant(
+      accountConfiguration(store, currentActor, id).revision === input.revision,
+      409,
+      "Account changed elsewhere; reopen and review your changes",
+    );
+    const changed =
+      previous.role !== input.role ||
+      previous.disabled !== input.disabled ||
+      hash !== null;
+    updateAccount(store, currentActor, id, {
+      role: input.role,
+      disabled: input.disabled,
+    });
+    if (hash !== null) {
+      store.db
+        .prepare("UPDATE accounts SET password_hash=? WHERE id=?")
+        .run(hash, id);
+      revokeAccountSessions(store, id);
+    }
+    return { changed, revoked: changed };
+  });
 }

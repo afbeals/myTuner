@@ -18,6 +18,7 @@ interface DependencyReport {
   }[];
   advisory: boolean;
   explanation: string;
+  editExplanation: string;
 }
 export function collectionDependencies(
   store: Store,
@@ -80,6 +81,8 @@ export function collectionDependencies(
       retained: Boolean(row.retained),
     })),
     advisory: true,
+    editExplanation:
+      "Changes affect future generated programming that uses this collection. Already generated airings and paused viewing keep their saved videos. Preview affected channels to review the updated selection.",
     explanation:
       "Deleting leaves materialized airings and paused revisions in place. Recurring selectors may prevent future generation if no other group can play. Materialized matches indicate overlapping collection videos, not their original selector.",
   };

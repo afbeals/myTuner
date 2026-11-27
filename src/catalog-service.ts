@@ -1,3 +1,9 @@
+import {
+  browseSelectionPage,
+  browseCatalogTree,
+  type SelectionPageInput,
+  type TreePageInput,
+} from "./catalog-selection.js";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import type { Store } from "./database.js";
@@ -117,6 +123,22 @@ export class CatalogService {
     return this.execute("options", account, profileId, input, options.signal);
   }
 
+  selectionPage(
+    account: Account,
+    profileId: string,
+    input: SelectionPageInput,
+    options: { signal?: AbortSignal } = {},
+  ) {
+    return this.execute("selection", account, profileId, input, options.signal);
+  }
+  treePage(
+    account: Account,
+    profileId: string,
+    input: TreePageInput,
+    options: { signal?: AbortSignal } = {},
+  ) {
+    return this.execute("tree", account, profileId, input, options.signal);
+  }
   assertCurrent(result: object, account: Account, profileId: string): void {
     const current = this.authority(account, profileId);
     const completed = this.completed.get(result);
@@ -176,6 +198,9 @@ export class CatalogService {
       this.revision(),
     ]);
     let job = this.jobs.get(key);
+    // A new mount may request the same page while an abandoned worker call
+    // drains. Queue one fresh job instead of inheriting its cancelled state.
+    if (job?.abort.signal.aborted && !job.waiters.size) job = undefined;
     const waiterCount = [...this.jobs.values()].reduce(
       (sum, entry) => sum + entry.waiters.size,
       0,
@@ -250,7 +275,7 @@ export class CatalogService {
     } finally {
       clearTimeout(deadline);
       for (const waiter of job.waiters) waiter.cleanup();
-      this.jobs.delete(job.key);
+      if (this.jobs.get(job.key) === job) this.jobs.delete(job.key);
       this.active = undefined;
       void this.pump();
     }
@@ -287,26 +312,40 @@ export class CatalogService {
       let result: Result;
       if (this.store.filename === ":memory:") {
         result =
-          job.operation === "library"
-            ? browseLibraryPage(
+          job.operation === "selection"
+            ? browseSelectionPage(
                 this.store,
                 account,
                 job.profileId,
-                job.input as LibraryPageInput,
+                job.input as SelectionPageInput,
               )
-            : job.operation === "media"
-              ? browseMediaPage(
+            : job.operation === "tree"
+              ? browseCatalogTree(
                   this.store,
                   account,
                   job.profileId,
-                  job.input as MediaPageInput,
+                  job.input as TreePageInput,
                 )
-              : programmingOptions(
-                  this.store,
-                  account,
-                  job.profileId,
-                  job.input as CatalogOptionsInput,
-                );
+              : job.operation === "library"
+                ? browseLibraryPage(
+                    this.store,
+                    account,
+                    job.profileId,
+                    job.input as LibraryPageInput,
+                  )
+                : job.operation === "media"
+                  ? browseMediaPage(
+                      this.store,
+                      account,
+                      job.profileId,
+                      job.input as MediaPageInput,
+                    )
+                  : programmingOptions(
+                      this.store,
+                      account,
+                      job.profileId,
+                      job.input as CatalogOptionsInput,
+                    );
       } else {
         const reply = await this.readWorker(job, account, revision);
         if (reply.revision !== revision) continue;

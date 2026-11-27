@@ -99,6 +99,7 @@ export async function generationPreflight(
   root: string,
 ) {
   const preview = await previewGeneration(store, input);
+  const canonicalRoot = await realpath(root).catch(() => root);
   let reusable = 0;
   for (const item of preview.items)
     for (const kind of input.kinds) {
@@ -114,7 +115,7 @@ export async function generationPreflight(
           {
             id: "generated",
             name: "Generated",
-            root_path: root,
+            root_path: canonicalRoot,
             kind: "videos",
             recursive: 1,
           },
@@ -224,7 +225,7 @@ export class GenerationRunner {
     private readonly background = new BackgroundWork(),
   ) {
     this.budget = new OutputBudget(root);
-    this.outputs = new OutputPaths(root);
+    this.outputs = new OutputPaths(root, store);
     // Interrupted work is replayable: incomplete outputs were never published.
     store.db.exec(
       "UPDATE generation_jobs SET status='queued' WHERE status='running'; UPDATE generation_items SET status='queued',waiting_reason=NULL WHERE status='running';",
@@ -311,12 +312,63 @@ export class GenerationRunner {
       )
       .all(id) as unknown as Task[];
   }
-  list() {
+  taskPage(id: string, offset: number, limit: number) {
+    this.get(id);
+    const items = this.store.db
+      .prepare(
+        "SELECT i.*,m.title,m.relative_path FROM generation_items i JOIN media m ON m.id=i.media_id WHERE job_id=? ORDER BY i.rowid LIMIT ? OFFSET ?",
+      )
+      .all(id, limit + 1, offset);
+    const current =
+      this.store.db
+        .prepare(
+          "SELECT m.relative_path FROM generation_items i JOIN media m ON m.id=i.media_id WHERE job_id=? AND i.status='running' ORDER BY i.rowid LIMIT 1",
+        )
+        .get(id) ?? null;
+    return {
+      items: items.slice(0, limit),
+      hasMore: items.length > limit,
+      offset,
+      limit,
+      current,
+    };
+  }
+  private admission(id: string, status: string, encoderWaiting = false) {
+    if (!["queued", "running"].includes(status))
+      return { admission: null, waitingReason: null };
+    if (encoderWaiting)
+      return { admission: "waiting", waitingReason: "playback-capacity" };
+    const state = this.background.status(`generation:${id}`);
+    return state.admission
+      ? state
+      : { admission: "waiting", waitingReason: "queue" };
+  }
+  summary(id: string): Record<string, unknown> {
+    this.get(id);
+    const { encoderWaiting, ...row } = this.store.db
+      .prepare(
+        "SELECT j.*,COUNT(i.id) AS total,COALESCE(SUM(i.status='completed'),0) AS completed,COALESCE(SUM(i.status='failed'),0) AS failed,COALESCE(SUM(i.status='cancelled'),0) AS cancelled,MAX(i.status='running' AND i.waiting_reason='playback-capacity') AS encoderWaiting FROM generation_jobs j LEFT JOIN generation_items i ON i.job_id=j.id WHERE j.id=? GROUP BY j.id",
+      )
+      .get(id)!;
+    return {
+      ...row,
+      ...this.admission(id, String(row.status), Boolean(encoderWaiting)),
+    };
+  }
+  list(): Record<string, unknown>[] {
     return this.store.db
       .prepare(
-        "SELECT j.*,COUNT(i.id) AS total,SUM(i.status='completed') AS completed,SUM(i.status='failed') AS failed FROM generation_jobs j LEFT JOIN generation_items i ON i.job_id=j.id GROUP BY j.id ORDER BY j.created_at DESC LIMIT 200",
+        "SELECT j.*,COUNT(i.id) AS total,SUM(i.status='completed') AS completed,SUM(i.status='failed') AS failed,MAX(i.status='running' AND i.waiting_reason='playback-capacity') AS encoderWaiting FROM generation_jobs j LEFT JOIN generation_items i ON i.job_id=j.id GROUP BY j.id ORDER BY j.created_at DESC LIMIT 200",
       )
-      .all();
+      .all()
+      .map(({ encoderWaiting, ...row }) => ({
+        ...row,
+        ...this.admission(
+          String(row.id),
+          String(row.status),
+          Boolean(encoderWaiting),
+        ),
+      }));
   }
   retry(id: string) {
     const job = this.get(id);
@@ -423,8 +475,11 @@ export class GenerationRunner {
           )
           .run(task.id);
         try {
-          await this.background.run("generation", controller.signal, () =>
-            this.generate(task, job, controller.signal),
+          await this.background.run(
+            "generation",
+            controller.signal,
+            () => this.generate(task, job, controller.signal),
+            `generation:${job.id}`,
           );
           this.store.db
             .prepare(

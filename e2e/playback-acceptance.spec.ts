@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import type { Playback, Source } from "../web/src/types";
 test.use({ baseURL: "http://127.0.0.1:8791" });
@@ -8,6 +9,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -34,9 +36,17 @@ async function mutate(page: Page, path: string, method: string, body: unknown) {
 async function watch(page: Page) {
   await page.goto("/#watch");
   await page
-    .getByRole("article")
-    .filter({ hasText: "Concurrent format proof" })
-    .getByRole("button", { name: "Watch live", exact: true })
+    .getByRole("button", {
+      name: "Preview Concurrent format proof",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("region", { name: "Selected channel details", exact: true })
+    .getByRole("button", {
+      name: "Watch Concurrent format proof live",
+      exact: true,
+    })
     .click();
 }
 async function advancing(page: Page) {
@@ -274,14 +284,21 @@ test("two viewers retain independent pause/audio/captions through HLS buffering,
         /\/api\/playback\/sessions\/[^/]+$/.test(new URL(r.url()).pathname),
     );
     await page
-      .locator(".video-stage")
       .getByRole("button", { name: "Channel guide", exact: true })
       .click();
     expect((await exited).ok()).toBe(true);
+    await expect(page.locator("video")).toHaveCount(0);
+    const secondExited = second.waitForResponse(
+      (response) =>
+        response.request().method() === "DELETE" &&
+        new URL(response.url()).pathname ===
+          `/api/playback/sessions/${secondSession.id}`,
+    );
     await second
-      .locator(".video-stage")
       .getByRole("button", { name: "Channel guide", exact: true })
       .click();
+    expect((await secondExited).ok()).toBe(true);
+    await expect(second.locator("video")).toHaveCount(0);
   } finally {
     await secondContext.close();
   }

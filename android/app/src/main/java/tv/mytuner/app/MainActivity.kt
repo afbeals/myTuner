@@ -87,6 +87,7 @@ class MainActivity : Activity() {
     private var contextText: TextView? = null
     private var lastErrorCategory = "none"
     private var playbackStatus: TextView? = null
+    private var pausedOverlay: TextView? = null
     private var pauseButton: Button? = null
     private var goLiveButton: Button? = null
     private var subtitleText: TextView? = null
@@ -187,13 +188,14 @@ class MainActivity : Activity() {
 
     private fun error(error: Throwable) {
         if (!active) return
-        if (error is ApiFailure && error.status == 401) {
+        val status = (error as? ApiFailure)?.status
+        lastErrorCategory = ConnectionDiagnostics.category(status)
+        ConnectionDiagnostics.pairingReason(status)?.let { reason ->
             vault.save(null)
             client?.token = null
-            pairing()
+            pairing(reason)
             return
         }
-        lastErrorCategory = ConnectionDiagnostics.category((error as? ApiFailure)?.status)
         val value =
             error.message ?: "Unable to reach your server. Check its address and network access."
         if (screen == "player") {
@@ -225,17 +227,23 @@ class MainActivity : Activity() {
         failed: ((Throwable) -> Unit)? = null,
         discarded: ((T) -> Unit)? = null,
         profileRequest: Boolean = false,
+        current: () -> Boolean = { true },
     ) {
         val requestEpoch = epoch
         val queue = if (profileRequest) profileTasks else tasks
-        queue.execute({ active && requestEpoch == epoch }) {
+        queue.execute({ active && requestEpoch == epoch && current() }) {
             try {
                 val value = work()
                 main.post {
-                    if (active && requestEpoch == epoch) done(value) else discarded?.invoke(value)
+                    if (active && requestEpoch == epoch && current()) done(value) else discarded?.invoke(value)
                 }
             } catch (e: Throwable) {
-                main.post { if (active && requestEpoch == epoch) (failed ?: ::error)(e) }
+                main.post {
+                    if (active && requestEpoch == epoch && current()) {
+                        if (ConnectionDiagnostics.pairingReason((e as? ApiFailure)?.status) != null) error(e)
+                        else (failed ?: ::error)(e)
+                    }
+                }
             }
         }
     }
@@ -287,6 +295,7 @@ class MainActivity : Activity() {
         previousDelivery = null
         captions = emptyList()
         overlay = null
+        pausedOverlay = null
         if (!id.isNullOrBlank() && a != null)
             worker.execute { runCatching { a.request("/api/playback/sessions/$id", "DELETE") } }
     }
@@ -411,12 +420,15 @@ class MainActivity : Activity() {
         )
         page.addView(card)
         val actions = row()
+        val attempts = ConnectRequests()
         val connect =
             button("Connect") {
+                // A newer invalid submission also replaces the older intended target.
+                val attempt = attempts.begin()
                 try {
                     val base = PlaybackMath.serverAddress(address.text.toString())
                     val candidate = LanApi(base)
-                    message.text = getString(R.string.connecting)
+                    message.text = getString(R.string.connecting, base)
                     message.visibility = View.VISIBLE
                     task(
                         { candidate.json("/api/health") },
@@ -438,6 +450,7 @@ class MainActivity : Activity() {
                                 pairing()
                             }
                         },
+                        current = { attempts.isCurrent(attempt) },
                     )
                 } catch (e: Exception) {
                     error(e)
@@ -488,7 +501,7 @@ class MainActivity : Activity() {
         page.addView(button("Back to server address") { connect() }.also { it.requestFocus() })
     }
 
-    private fun pairing() {
+    private fun pairing(reason: PairingReason = PairingReason.FIRST_TIME) {
         if (client == null) {
             connect()
             return
@@ -497,7 +510,7 @@ class MainActivity : Activity() {
         shell(
             "pairing",
             "Approve this TV in your browser",
-            "Your account password stays off the television.",
+            ConnectionDiagnostics.pairingDescription(reason),
         )
         val a = api()
         val card = row().apply { background = shape(panel); setPadding(px(32), px(32), px(32), px(32)) }
@@ -519,7 +532,7 @@ class MainActivity : Activity() {
             )
         )
         val actions = row()
-        actions.addView(button("Get a new code") { pairing() })
+        actions.addView(button("Get a new code") { pairing(reason) })
         actions.addView(button("Change server") { connect() })
         actions.addView(button("Connection help") { connectionDetails() })
         page.addView(actions)
@@ -747,29 +760,33 @@ class MainActivity : Activity() {
         keypad.getChildAt(0).requestFocus()
     }
 
-    private fun guide() {
+    private fun guide(invokedTag: String? = null) {
         val p = profile ?: return profiles()
         shell("guide", "On your channels", "Now and next · OK always joins the channel live.")
         val a = api()
         val navigation = row()
+        val windowLabel = text("", 26, muted)
+        page.addView(windowLabel)
+        fun move(action: GuideNavigation.Action) {
+            val target = GuideNavigation.move(guideShift, action)
+            guideShift = target.shiftMs
+            guide(target.focusTag)
+        }
         navigation.addView(
             button("← Earlier") {
-                    guideShift = (guideShift - 1800000).coerceAtLeast(0)
-                    guide()
+                    move(GuideNavigation.Action.EARLIER)
                 }
                 .apply { tag = "guide-earlier" }
         )
         navigation.addView(
             button("Now") {
-                    guideShift = 0
-                    guide()
+                    move(GuideNavigation.Action.NOW)
                 }
                 .apply { tag = "guide-now" }
         )
         navigation.addView(
             button("Later →") {
-                    guideShift = (guideShift + 1800000).coerceAtMost(5 * 3600000)
-                    guide()
+                    move(GuideNavigation.Action.LATER)
                 }
                 .apply { tag = "guide-later" }
         )
@@ -781,9 +798,19 @@ class MainActivity : Activity() {
                 .apply { tag = "guide-profiles" }
         )
         page.addView(navigation)
+        page.addView(text("Earlier stops at now · Later starts up to 5 hours ahead", 24, muted))
+        invokedTag?.let { page.findViewWithTag<View>(it)?.requestFocus() }
+        val guideEpoch = epoch
         val contentIndex = page.childCount
         fun refreshGuide() {
             val now = System.currentTimeMillis() + guideShift
+            windowLabel.text = getString(
+                R.string.guide_window,
+                SimpleDateFormat("EEE, MMM d · h:mm a", Locale.getDefault()).format(Date(now)),
+                clock(now + 3600000),
+                if (guideShift == 0L) getString(R.string.guide_window_current)
+                else resources.getQuantityString(R.plurals.guide_window_ahead, (guideShift / 60000).toInt(), guideShift / 60000),
+            )
             main.postDelayed({ refreshGuide() }, 30000)
             task(
                 {
@@ -792,7 +819,7 @@ class MainActivity : Activity() {
                     )
                 },
                 { result ->
-                    val focusTag = currentFocus?.tag as? String
+                    val focusTag = GuideNavigation.retainedTag(currentFocus?.tag as? String, invokedTag)
                     while (page.childCount > contentIndex) page.removeViewAt(contentIndex)
                     message.visibility = View.GONE
                     headerClock?.text = clock(System.currentTimeMillis())
@@ -940,6 +967,13 @@ class MainActivity : Activity() {
                         )
                     )
                 },
+                { failure ->
+                    val focusTag = GuideNavigation.retainedTag(currentFocus?.tag as? String, invokedTag)
+                    error(failure)
+                    if (epoch == guideEpoch && screen == "guide") {
+                        (focusTag?.let { page.findViewWithTag<View>(it) } ?: navigation.getChildAt(1)).requestFocus()
+                    }
+                },
             )
         }
         message.text = "Loading your channels…"
@@ -1053,7 +1087,17 @@ class MainActivity : Activity() {
                 setBackgroundColor(0xcc101a20.toInt())
                 setPadding(px(24), px(24), px(24), px(24))
             }
-        frame.addView(errorText, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+        // Stack notices so recovery errors stay above the retained pause context.
+        val notices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        notices.addView(errorText, LinearLayout.LayoutParams(-1, -2))
+        pausedOverlay = text("", 30, ink, true).apply {
+            visibility = View.GONE
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xcc101a20.toInt())
+            setPadding(px(24), px(16), px(24), px(16))
+        }
+        notices.addView(pausedOverlay, LinearLayout.LayoutParams(-1, -2))
+        frame.addView(notices, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
             setMargins(px(96), px(56), px(96), 0)
         })
         overlay = column(alt).apply { setPadding(px(32), px(24), px(32), px(24)) }
@@ -1167,7 +1211,7 @@ class MainActivity : Activity() {
         showDialog(dialog)
         val a = api()
         val requestId = UUID.randomUUID().toString()
-        task({ a.json("/api/playback/sessions/$sessionId/report-preview", "POST", obj("category" to category, "client" to "tv")) }, { draft ->
+        task({ a.json("/api/playback/sessions/$sessionId/report-preview", "POST", obj("category" to category, "client" to "tv", "appVersion" to packageManager.getPackageInfo(packageName, 0).versionName)) }, { draft ->
             if (!dialog.isShowing) return@task
             val summary = draft.getJSONObject("summary")
             status.text = "Exact summary to send to your administrator. No logs, files, screenshots, credentials or PINs.\n" +
@@ -1291,6 +1335,12 @@ class MainActivity : Activity() {
             else if (behind > 2000) "${behind/1000} SECONDS BEHIND LIVE" else "● LIVE"
         val context = s.optJSONObject("context")
         val program = context?.optJSONObject("program")
+        pausedOverlay?.apply {
+            visibility = if (s.optBoolean("paused")) View.VISIBLE else View.GONE
+            val duration = context?.optLong("entryDurationMs") ?: 0L
+            val elapsed = duration - (context?.optLong("remainingMs") ?: duration)
+            text = "Paused · ${context?.optString("title") ?: playingTitle?.text ?: "Current program"}\n${PlaybackMath.displayTime(elapsed)} / ${PlaybackMath.displayTime(duration)}"
+        }
         contextText?.text = if (context == null) "" else listOf(
             if (context.optString("kind") == "commercial") "Commercial · ${(context.optLong("remainingMs") + 999)/1000} seconds remaining · ${program?.optString("title") ?: "Programming resumes next"}"
             else "${context.optString("title")} · ${if (context.isNull("seasonNumber")) "" else "S${context.optInt("seasonNumber")} E${context.optInt("episodeNumber")}"}",

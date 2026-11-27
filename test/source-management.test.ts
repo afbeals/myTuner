@@ -1,3 +1,4 @@
+import { sourceDetails } from "../src/source-configuration.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -48,7 +49,11 @@ test("source name and scope edits retain media identity, grants and untouched or
   const updated = await editSource(
     f.store,
     f.src.id,
-    { name: "Corrected", recursive: false },
+    {
+      revision: sourceDetails(f.store, f.src.id).revision,
+      name: "Corrected",
+      recursive: false,
+    },
     [join(f.root, "data")],
     () => {},
     () => false,
@@ -71,7 +76,12 @@ test("source root changes reset only an unused catalog and its authority, then r
   const updated = await editSource(
     f.store,
     f.src.id,
-    { root: join(f.root, "other"), kind: "movies" },
+    {
+      revision: sourceDetails(f.store, f.src.id).revision,
+      resetConfirmed: true,
+      root: join(f.root, "other"),
+      kind: "movies",
+    },
     [],
     () => {},
     () => false,
@@ -159,7 +169,11 @@ test("channel references block destructive edits and removal while retaining ord
     editSource(
       f.store,
       f.src.id,
-      { root: join(f.root, "other") },
+      {
+        revision: sourceDetails(f.store, f.src.id).revision,
+        resetConfirmed: true,
+        root: join(f.root, "other"),
+      },
       [],
       () => {},
       () => false,
@@ -171,7 +185,10 @@ test("channel references block destructive edits and removal while retaining ord
       await editSource(
         f.store,
         f.src.id,
-        { name: "Still editable" },
+        {
+          revision: sourceDetails(f.store, f.src.id).revision,
+          name: "Still editable",
+        },
         [],
         () => {},
         () => false,
@@ -187,7 +204,7 @@ test("active scans, queued generation, overlap and revoked authority prevent sou
     editSource(
       f.store,
       f.src.id,
-      { name: "Denied" },
+      { revision: sourceDetails(f.store, f.src.id).revision, name: "Denied" },
       [],
       () => {},
       () => true,
@@ -198,7 +215,11 @@ test("active scans, queued generation, overlap and revoked authority prevent sou
     editSource(
       f.store,
       f.src.id,
-      { root: join(f.root, "other") },
+      {
+        revision: sourceDetails(f.store, f.src.id).revision,
+        resetConfirmed: true,
+        root: join(f.root, "other"),
+      },
       [join(f.root, "other")],
       () => {},
       () => false,
@@ -209,7 +230,7 @@ test("active scans, queued generation, overlap and revoked authority prevent sou
     editSource(
       f.store,
       f.src.id,
-      { name: "Denied" },
+      { revision: sourceDetails(f.store, f.src.id).revision, name: "Denied" },
       [],
       () => {
         throw Error("revoked");
@@ -301,7 +322,10 @@ test("HTTP source changes enforce admin access and saved credentials remain undi
     method: "PATCH",
     url: `/api/sources/${f.src.id}`,
     headers,
-    payload: { name: "HTTP edited" },
+    payload: {
+      revision: sourceDetails(f.store, f.src.id).revision,
+      name: "HTTP edited",
+    },
   });
   assert.equal(edited.statusCode, 200, edited.body);
   f.store.db
@@ -420,7 +444,11 @@ for (const change of ["removed", "changed"] as const)
               method: "PATCH",
               url: `/api/sources/${f.src.id}`,
               headers,
-              payload: { root: join(f.root, "other") },
+              payload: {
+                revision: sourceDetails(f.store, f.src.id).revision,
+                resetConfirmed: true,
+                root: join(f.root, "other"),
+              },
             },
       );
       assert.equal(

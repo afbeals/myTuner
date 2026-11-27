@@ -14,7 +14,7 @@ export class ArtworkService {
     private readonly key?: Buffer,
     private readonly fetcher: typeof fetch = fetch,
   ) {
-    this.cache = new ManagedCache(root);
+    this.cache = new ManagedCache(root, undefined, undefined, undefined, store);
   }
   get(item: Media, index: number): Promise<{ type: string; bytes: Buffer }> {
     const pending = this.read(item, index).finally(() =>

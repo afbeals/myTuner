@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
@@ -8,11 +9,12 @@ async function openSource(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
   await page.goto("/#sources");
-  await page.getByRole("button", { name: "+ Add source", exact: true }).click();
+  await page.getByRole("button", { name: "Add source", exact: true }).click();
   return page.getByRole("dialog", { name: "Add a source", exact: true });
 }
 const found = {
@@ -55,7 +57,7 @@ test("manual directory checks are explicit, explain partial samples and keep the
     await route.fulfill({ json: found });
   });
   const dialog = await openSource(page),
-    path = dialog.getByLabel("Container media path", { exact: true });
+    path = dialog.getByLabel("Media directory inside MyTuner", { exact: true });
   await path.fill("/synthetic/manual");
   await dialog
     .getByLabel("Source name", { exact: true })
@@ -64,20 +66,21 @@ test("manual directory checks are explicit, explain partial samples and keep the
   await dialog
     .getByRole("button", { name: "Check directory", exact: true })
     .click();
-  await expect(dialog.getByRole("status")).toContainText(
-    "You can keep editing or cancel",
-  );
+  await expect(dialog.getByRole("status")).toContainText("Checking directory…");
   await expect(
-    dialog.getByRole("button", { name: "Cancel directory check", exact: true }),
+    dialog.getByRole("button", { name: "Cancel check", exact: true }),
   ).toBeVisible();
   release();
   const result = dialog.getByRole("region", {
-    name: "Container media path directory check",
+    name: "Media directory inside MyTuner directory check",
     exact: true,
   });
   await expect(result).toContainText("Directory exists and is readable");
-  await expect(result).toContainText("Partial check; other files may exist");
-  await expect(result).toContainText("playback not verified");
+  await expect(result).toContainText("Partial sample; more files may exist");
+  await expect(result).toContainText("Playback has not been inspected");
+  await result
+    .getByText("2 supported file names found", { exact: true })
+    .click();
   await expect(result).toContainText("Example.S01E01.mkv");
   await expect(path).toHaveValue("/synthetic/manual");
   await expect(dialog.getByLabel("Source name", { exact: true })).toHaveValue(
@@ -153,7 +156,7 @@ test("late directory replies cannot replace a changed path; missing and checked-
       });
   });
   const dialog = await openSource(page),
-    path = dialog.getByLabel("Container media path", { exact: true });
+    path = dialog.getByLabel("Media directory inside MyTuner", { exact: true });
   await path.fill("/synthetic/old");
   await dialog
     .getByRole("button", { name: "Check directory", exact: true })
@@ -163,7 +166,7 @@ test("late directory replies cannot replace a changed path; missing and checked-
   release();
   await expect(
     dialog.getByRole("region", {
-      name: "Container media path directory check",
+      name: "Media directory inside MyTuner directory check",
       exact: true,
     }),
   ).toHaveCount(0);
@@ -173,11 +176,12 @@ test("late directory replies cannot replace a changed path; missing and checked-
     .click();
   await expect(
     dialog.getByRole("region", {
-      name: "Container media path directory check",
+      name: "Media directory inside MyTuner directory check",
       exact: true,
     }),
   ).toContainText("Directory not found");
   await path.fill("/synthetic/empty");
+  await dialog.getByText("Directory check options", { exact: true }).click();
   await dialog
     .getByRole("combobox", { name: "Directory check scope", exact: true })
     .selectOption("shallow");
@@ -185,14 +189,19 @@ test("late directory replies cannot replace a changed path; missing and checked-
     .getByRole("button", { name: "Check directory", exact: true })
     .click();
   const result = dialog.getByRole("region", {
-    name: "Container media path directory check",
+    name: "Media directory inside MyTuner directory check",
     exact: true,
   });
   await expect(result).toContainText(
     "No supported files were found in the checked area",
   );
-  await expect(result).toContainText("Checked area completed");
-  await expect(result).toContainText("This directory only");
+  await expect(result).toContainText("Sample check complete");
+  await expect(
+    dialog.getByRole("combobox", {
+      name: "Directory check scope",
+      exact: true,
+    }),
+  ).toHaveValue("shallow");
   await expect(result).not.toContainText("Directory not found");
   await expect(path).toHaveValue("/synthetic/empty");
 });
@@ -216,13 +225,13 @@ test("configured source recursion changes invalidate both successful and pending
       .catch(() => {});
   });
   const dialog = await openSource(page),
-    path = dialog.getByLabel("Container media path", { exact: true });
+    path = dialog.getByLabel("Media directory inside MyTuner", { exact: true });
   await path.fill("/synthetic/manual");
   await dialog
     .getByRole("button", { name: "Check directory", exact: true })
     .click();
   const result = dialog.getByRole("region", {
-    name: "Container media path directory check",
+    name: "Media directory inside MyTuner directory check",
     exact: true,
   });
   await expect(result).toBeVisible();

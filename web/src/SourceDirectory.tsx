@@ -1,12 +1,23 @@
-import { useEffect, useId, useState } from "react";
+import { DirectoryTree, catalogDirectoryLoader } from "./DirectoryTree";
+import { useId, useState } from "react";
 import { Field, Load, useRemote, useMarkFormDirty } from "./ui";
 
 export function SourceDirectory(props: {
   sourceId?: string | undefined;
+  profileId?: string | undefined;
   name: string;
   label: string;
   version?: number;
 }) {
+  if (props.profileId && props.sourceId)
+    return (
+      <TreeDirectoryField
+        key={props.sourceId}
+        {...props}
+        profileId={props.profileId}
+        sourceId={props.sourceId}
+      />
+    );
   // Remounting clears a selected folder as soon as its source changes.
   return <DirectoryField key={props.sourceId ?? "none"} {...props} />;
 }
@@ -28,13 +39,10 @@ function DirectoryField({
     [search, setSearch] = useState(""),
     [query, setQuery] = useState(""),
     [offset, setOffset] = useState(0);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setQuery(search);
-      setOffset(0);
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [search]);
+  const submitSearch = () => {
+    setQuery(search);
+    setOffset(0);
+  };
   const params = new URLSearchParams({
     search: query,
     offset: String(offset),
@@ -86,13 +94,19 @@ function DirectoryField({
             value={search}
             onKeyDown={(event) => {
               // Searching must never submit the surrounding grant/job form.
-              if (event.key === "Enter") event.preventDefault();
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submitSearch();
+              }
             }}
             onChange={(e) => {
               e.stopPropagation();
               setSearch(e.target.value);
             }}
           />
+          <button type="button" className="secondary" onClick={submitSearch}>
+            Search
+          </button>
           <button
             type="button"
             className="secondary"
@@ -100,19 +114,15 @@ function DirectoryField({
           >
             Entire source
           </button>
-          <Load
-            {...folders}
-            loading={folders.loading || search !== query}
-            retry={folders.reload}
-          />
-          {folders.data && search === query && !folders.data.items.length && (
+          <Load {...folders} retry={folders.reload} />
+          {folders.data && !folders.data.items.length && (
             <p role="status">
               No matching scanned subfolders. Scan the source or enter the path
               manually.
             </p>
           )}
           <ul className="directory-options">
-            {(search === query ? folders.data?.items : [])?.map((folder) => (
+            {folders.data?.items.map((folder) => (
               <li key={folder}>
                 <button
                   type="button"
@@ -129,7 +139,7 @@ function DirectoryField({
               <button
                 type="button"
                 className="secondary"
-                disabled={!offset || folders.loading || search !== query}
+                disabled={!offset || folders.loading}
                 onClick={() => setOffset((v) => Math.max(0, v - 50))}
               >
                 Previous folders
@@ -137,9 +147,7 @@ function DirectoryField({
               <button
                 type="button"
                 className="secondary"
-                disabled={
-                  !folders.data.hasMore || folders.loading || search !== query
-                }
+                disabled={!folders.data.hasMore || folders.loading}
                 onClick={() => setOffset((v) => v + 50)}
               >
                 More folders
@@ -147,6 +155,54 @@ function DirectoryField({
             </div>
           )}
         </section>
+      )}
+    </div>
+  );
+}
+
+function TreeDirectoryField({
+  profileId,
+  sourceId,
+  name,
+  label,
+  version = 0,
+}: {
+  profileId: string;
+  sourceId: string;
+  name: string;
+  label: string;
+  version?: number;
+}) {
+  const [value, setValue] = useState(""),
+    [open, setOpen] = useState(false),
+    markDirty = useMarkFormDirty();
+  return (
+    <div className="directory-field">
+      <Field
+        label={label}
+        name={name}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="Entire source"
+        hint="A folder from the indexed library. Original videos remain in place."
+      />
+      <button type="button" className="secondary" onClick={() => setOpen(true)}>
+        Browse subfolders
+      </button>
+      {open && (
+        <DirectoryTree
+          identity={`${profileId}:${sourceId}:${version}`}
+          title={label}
+          rootLabel="Source"
+          load={catalogDirectoryLoader(profileId, sourceId)}
+          initial={[value]}
+          onApply={(paths) => {
+            setValue(paths[0] ?? "");
+            markDirty();
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
   );

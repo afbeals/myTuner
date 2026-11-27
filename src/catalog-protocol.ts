@@ -1,3 +1,9 @@
+import type {
+  browseSelectionPage,
+  browseCatalogTree,
+  SelectionPageInput,
+  TreePageInput,
+} from "./catalog-selection.js";
 import type { Account } from "./domain.js";
 import type { browseLibraryPage } from "./library-page.js";
 import type { browseMediaPage, programmingOptions } from "./library.js";
@@ -6,6 +12,11 @@ export type LibraryPageInput = Parameters<typeof browseLibraryPage>[3];
 export type MediaPageInput = Parameters<typeof browseMediaPage>[3];
 export type CatalogOptionsInput = Parameters<typeof programmingOptions>[3];
 export interface CatalogOperations {
+  selection: {
+    input: SelectionPageInput;
+    result: ReturnType<typeof browseSelectionPage>;
+  };
+  tree: { input: TreePageInput; result: ReturnType<typeof browseCatalogTree> };
   library: {
     input: LibraryPageInput;
     result: ReturnType<typeof browseLibraryPage>;
@@ -28,7 +39,7 @@ export interface CatalogWork {
   operation: CatalogOperation;
   account: Account;
   profileId: string;
-  input: LibraryPageInput | MediaPageInput | CatalogOptionsInput;
+  input: CatalogOperations[CatalogOperation]["input"];
   cancellation: SharedArrayBuffer;
 }
 export type CatalogWorkerMessage =

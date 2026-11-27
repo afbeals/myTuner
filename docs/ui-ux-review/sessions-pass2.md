@@ -1,0 +1,32 @@
+# Devices & sessions — independent second pass
+
+Route `#sessions`; base `a67d418cf7258e669b11fcc9cae63cdc1bcda92d`; isolated synthetic fixture port 19025. Viewed desktop 1440×1000 and narrow 390×844 screenshots. Independent initial observations were recorded before code inspection; no previous findings or pass-1 report was read.
+
+Evidence `/private/tmp/mytuner-ui-review/sessions-p2/`: `desktop.png`, `narrow.png` (viewed), `three-sessions.png`, `cancel-revoke.png`, `revoke-error.png`, `injected-empty.png`, `injected-loading.png`, `injected-list-error.png`, corresponding ARIA snapshots, independent notes, browser events and server log. Empty/list failure/delay and revoke failure are explicitly injected UI states. Two browser logins, one named synthetic TV pairing, successful revocation and self-revocation used real local APIs.
+
+## Existing workflow and verification
+
+Initial state contains Browser · This session, expiry and Revoke access. A second isolated browser logged in to the same account; a synthetic pairing named Review Bedroom TV was approved and polled into a device session. Reload then displayed two browser rows and Paired TV. No account selection or administrator cross-account session inventory is provided: this screen lists the signed-in account’s sessions.
+
+Activating Revoke access opens a native `confirm`: “Revoke this session? It will need to sign in or pair again.” Dismissing leaves rows unchanged. Accepting a second-browser revocation removes that row, and a request from the revoked browser returned 401. Self-revocation returns the current browser to sign-in. A synthetic 503 revocation error is shown inline without removing the row; retry after restoring transport succeeds. List loading has a Loading status; list failure supplies Try again and recovers. Injected zero rows shows No active sessions and an explanation. Zero active sessions is not an ordinary authenticated state, so it is labelled synthetic rather than claimed as a normal journey.
+
+Both viewed widths remain within the viewport. At 390px the expiry and current-session heading wrap, and Revoke access wraps onto two lines in a small right-hand column. This is readable but needlessly cramped for the page’s only action. There is no application-owned modal in the current flow, so no modal screenshot could be captured; the native confirmation text was recorded through Playwright’s dialog event.
+
+## Ranked findings
+
+- **SES2-01 · P2 · additional UX — identify the session before asking for revocation.** Two browser rows differ only by expiry; a TV created with a recognizable name loses that name in the list. “Browser”/“Paired TV” plus expiry is inadequate for confidently selecting an old device. Preserve a privacy-conscious device label, created/last-used timestamps where available, and an explicit current-session marker. Do not invent device identity from unreliable fingerprints. **Accept:** two paired TVs and three browsers can be distinguished by useful labels/context, and the confirmation names the captured target. API/data support is required; frontend relabelling alone cannot recover discarded names.
+- **SES2-02 · P2 · owner request (GLO-08) — replace native confirmation for in-app revocation.** Confirmed browser-owned dialog has no captured device name and does not make current-browser sign-out particularly explicit. Use the shared application confirmation with Cancel and Revoke access, target identity, and a tailored “This browser will be signed out” consequence. **Accept:** Escape/Cancel leave access intact, focus returns to the originating row, pending prevents duplicate activation, success removes only the captured row, and a failure remains recoverable. This does not apply to tab-close prompts.
+- **SES2-03 · P2 · bug/accessibility — repeated action names omit row context.** All three controls expose the exact same accessible name “Revoke access”; rows are sections without accessible names. Screen-reader button navigation cannot identify the intended session. Add target context to accessible names/descriptions and associate row headings. **Accept:** each button is distinguishable in the accessibility tree, including two devices with the same friendly name; avoid exposing session hashes as labels.
+- **SES2-04 · P3 · additional UX — responsive action placement and completion feedback.** Narrow rows compress the only action and successful revocation is communicated mainly by disappearance. Stack the action beneath details at narrow widths, retain clear danger/secondary styling, and announce which session was revoked. **Accept:** at 320/390px the label fits without awkward wrapping, focus moves to a sensible surviving target, and success is announced without requiring visual comparison.
+
+No P0/P1 or cross-account access defect was confirmed. Expired-row pruning, many-session pagination and TV playback invalidation were not proven by this bounded screen review; do not infer them from successful browser 401 alone.
+
+## Owner mapping and shared work
+
+Applicable GLO-08 is reproduced; GLO-01 supplies the confirmation foundation; GLO-06 applies to narrow action grouping; GLO-04 applies to session identity and consequences. GLO-03’s capitalization is already correct here, while ordering remains global. GLO-05 should not hide revocation consequences. Picker/search/player/duration IDs do not apply. No CSP violation was observed.
+
+**Global construction:** named confirmation modal with focus restoration/sticky actions; async success/error announcement pattern; contextual accessible action naming convention. **Page adoption:** apply the confirmation to row revocation, apply contextual names to each Revoke access control, and apply completion announcement/focus recovery after row removal. Keep current-browser sign-out as an explicit page-specific consequence.
+
+Supporting code: `web/src/Management.tsx:1073` SessionsPage, `:1097` generic row labels, `:1111` native confirmation and current-session expiration event; `src/identity-routes.ts:194` account-scoped listing and `:209` deletion. Listing selects only token hash/expiry/kind; recognizable labels and activity need a deliberate privacy/data-lifecycle design, not a cosmetic-only task. No automatic revocation or deletion policy is proposed.
+
+Cleanup: browser, extra browser context and isolated fixture closed via `r.close()`. No code, tests, baselines, build, version, media or provider changes.

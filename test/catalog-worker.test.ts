@@ -323,3 +323,190 @@ test("a commit before reader dispatch retries at the new revision and records th
   assert.equal(page.movies[0]!.title, "Current title");
   reader.assertCurrent(page, f.owner, f.profileId);
 });
+
+test("worker selection pages and directory/filename browsing stay bounded and grant-contained without disk probes", async (t) => {
+  const f = await fixture(t),
+    reader = f.service();
+  const second = media(f.store, f.src.id, "Visible/Nested/needle.mp4");
+  media(f.store, f.src.id, "Hidden/secret.mp4");
+  f.store.db
+    .prepare("UPDATE source_grants SET subtree='Visible' WHERE profile_id=?")
+    .run(f.profileId);
+  const query = {
+    sourceId: f.src.id,
+    parent: "",
+    offset: 0,
+    limit: 1,
+    search: "",
+    recursive: false,
+    mode: "folders" as const,
+  };
+  const roots = await reader.treePage(f.owner, f.profileId, query);
+  assert.deepEqual(
+    roots.items.map((row) => row.path),
+    ["Visible"],
+  );
+  const children = await reader.treePage(f.owner, f.profileId, {
+    ...query,
+    parent: "Visible",
+  });
+  assert.deepEqual(
+    children.items.map((row) => row.path),
+    ["Visible/Nested"],
+  );
+  const names = await reader.treePage(f.owner, f.profileId, {
+    ...query,
+    mode: "files",
+    recursive: true,
+    search: "needle",
+  });
+  assert.deepEqual(
+    names.items.map((row) => row.id),
+    [second.id],
+  );
+  const folderNameIsNotFilename = await reader.treePage(f.owner, f.profileId, {
+    ...query,
+    mode: "files",
+    recursive: true,
+    search: "Visible",
+  });
+  assert.equal(folderNameIsNotFilename.total, 0);
+  const selection = {
+    type: "folder" as const,
+    sourceId: f.src.id,
+    directory: "Visible",
+    recursive: true,
+  };
+  const first = await reader.selectionPage(f.owner, f.profileId, {
+    selection,
+    includeUnavailable: false,
+    offset: 0,
+    limit: 1,
+    search: "",
+  });
+  const next = await reader.selectionPage(f.owner, f.profileId, {
+    selection,
+    includeUnavailable: false,
+    offset: 1,
+    limit: 1,
+    search: "",
+  });
+  assert.equal(first.total, 2);
+  assert.equal(first.items.length, 1);
+  assert.equal(next.items.length, 1);
+  assert.notEqual(first.items[0]!.id, next.items[0]!.id);
+  await assert.rejects(
+    reader.selectionPage(f.owner, f.profileId, {
+      selection: {
+        type: "folder",
+        sourceId: f.src.id,
+        directory: "../escape",
+        recursive: true,
+      },
+      includeUnavailable: false,
+      offset: 0,
+      limit: 1,
+      search: "",
+    }),
+    /escapes/,
+  );
+  f.store.db
+    .prepare("DELETE FROM source_grants WHERE profile_id=?")
+    .run(f.profileId);
+  const revoked = await reader.treePage(f.owner, f.profileId, query);
+  assert.equal(revoked.total, 0);
+});
+test("9k episode selection hydrates only the requested detail page", async (t) => {
+  const f = await fixture(t),
+    reader = f.service({ timeoutMs: 30000 });
+  f.store.db
+    .prepare("UPDATE sources SET kind='shows' WHERE id=?")
+    .run(f.src.id);
+  const { randomUUID } = await import("node:crypto");
+  const insert = f.store.db.prepare(
+    "INSERT INTO media(id,source_id,relative_path,title,duration_ms,size,mtime_ms,metadata_json)VALUES(?,?,?,?,1000,10,0,?)",
+  );
+  f.store.transaction(() => {
+    for (let index = 0; index < 9000; index++)
+      insert.run(
+        randomUUID(),
+        f.src.id,
+        `Visible/Series/episode-${String(index).padStart(5, "0")}.mp4`,
+        `Episode ${index}`,
+        JSON.stringify({
+          seriesTitle: "Series",
+          seasonNumber: 1,
+          episodeNumber: index + 1,
+        }),
+      );
+  });
+  const result = await reader.selectionPage(f.owner, f.profileId, {
+    selection: {
+      type: "folder",
+      sourceId: f.src.id,
+      directory: "Visible/Series",
+      recursive: true,
+    },
+    includeUnavailable: false,
+    offset: 8900,
+    limit: 24,
+    search: "",
+  });
+  assert.equal(result.total, 9000);
+  assert.equal(result.items.length, 24);
+  assert.equal(result.hasMore, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 40000);
+});
+
+test("an immediate same-page remount queues behind cancelled work and keeps the replacement coalesced", async (t) => {
+  const f = await fixture(t),
+    firstHold = gate(),
+    secondHold = gate(),
+    firstEntered = gate(),
+    secondEntered = gate();
+  let builds = 0;
+  const reader = f.service({
+    maxQueued: 1,
+    prepare: async (store, options) => {
+      builds++;
+      if (builds === 1) {
+        firstEntered.release();
+        await firstHold.promise;
+      }
+      if (builds === 2) {
+        secondEntered.release();
+        await secondHold.promise;
+      }
+      return ensureCatalogProjection(store, options);
+    },
+  });
+  const controller = new AbortController();
+  const first = reader.libraryPage(f.owner, f.profileId, input, {
+    signal: controller.signal,
+  });
+  const rejected = assert.rejects(first, /cancelled/);
+  try {
+    await firstEntered.promise;
+    controller.abort();
+    await rejected;
+    const replacement = reader.libraryPage(f.owner, f.profileId, input);
+    await assert.rejects(
+      reader.libraryPage(f.owner, f.profileId, { ...input, offset: 24 }),
+      /busy/,
+    );
+    firstHold.release();
+    await secondEntered.promise;
+    const shared = reader.libraryPage(f.owner, f.profileId, input);
+    secondHold.release();
+    const [one, two] = await Promise.all([replacement, shared]);
+    assert.equal(one, two);
+    assert.deepEqual(
+      one.movies.map((item) => item.id),
+      [f.item.id],
+    );
+    assert.equal(builds, 2);
+  } finally {
+    firstHold.release();
+    secondHold.release();
+  }
+});
