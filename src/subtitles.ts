@@ -1,3 +1,4 @@
+import { OutputPaths } from "./output-paths.js";
 import type { Store } from "./database.js";
 import {
   advertisedSubtitles,
@@ -9,8 +10,7 @@ import { EncoderAdmission } from "./encoder-admission.js";
 import { textSubtitleCodecs } from "./playback-policy.js";
 export { textSubtitleCodecs } from "./playback-policy.js";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { stat } from "node:fs/promises";
 import type { Media, Source } from "./domain.js";
 import { invariant } from "./domain.js";
 import { safeMediaPath, probeMedia } from "./catalog.js";
@@ -24,13 +24,15 @@ export class SubtitleService {
   }>();
   private stopping = false;
   private readonly cache: ManagedCache;
+  private readonly outputs: OutputPaths;
   constructor(
     private readonly root: string,
     private readonly encode = runFFmpeg,
     private readonly encoders = new EncoderAdmission(),
     private readonly store?: Store,
   ) {
-    this.cache = new ManagedCache(root);
+    this.cache = new ManagedCache(root, undefined, undefined, undefined, store);
+    this.outputs = new OutputPaths(root, store);
   }
   private pending = new Set<Promise<Buffer>>();
   get(
@@ -125,7 +127,11 @@ export class SubtitleService {
         ]),
       )
       .digest("hex");
-    await mkdir(this.root, { recursive: true });
+    this.outputs.create([
+      source.root_path,
+      ...(source.subtitle_root ? [source.subtitle_root] : []),
+      ...(source.metadata_root ? [source.metadata_root] : []),
+    ]);
     const cached = await this.cache.get(key + ".vtt", check);
     if (cached) return cached;
     check();
@@ -134,9 +140,13 @@ export class SubtitleService {
       429,
       "Subtitle extraction is busy; retry shortly",
     );
-    const controller = new AbortController(),
-      temporary = join(this.root, key + "." + randomUUID() + ".partial.vtt");
-    const task = { controller, promise: Promise.resolve(Buffer.alloc(0)) };
+    const controller = new AbortController();
+    const stage = this.outputs.stage(`.partial-${randomUUID()}.vtt`),
+      temporary = stage.path;
+    const task: { controller: AbortController; promise: Promise<Buffer> } = {
+      controller,
+      promise: Promise.resolve(Buffer.alloc(0)),
+    };
     this.active.add(task);
     const timer = setInterval(() => {
       try {
@@ -171,9 +181,11 @@ export class SubtitleService {
             temporary,
           ],
           signal,
+          { fd: stage.fd, format: "webvtt" },
         ),
       );
-      const size = (await stat(temporary)).size;
+      const bytes = this.outputs.read(stage, 10 * 1024 * 1024);
+      const size = bytes.length;
       invariant(
         size > 0 && size < 10 * 1024 * 1024,
         502,
@@ -196,7 +208,6 @@ export class SubtitleService {
         "Source changed during subtitle extraction",
       );
       check();
-      const bytes = await readFile(temporary);
       if (external)
         invariant(
           /\d{2}:\d{2}(?::\d{2})?\.\d{3}\s+-->\s+\d/.test(
@@ -211,7 +222,7 @@ export class SubtitleService {
     })().finally(async () => {
       clearInterval(timer);
       this.active.delete(task);
-      await rm(temporary, { force: true });
+      this.outputs.close(stage);
     });
     return task.promise;
   }

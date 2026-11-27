@@ -1,0 +1,1098 @@
+{
+  "sha": "a67d418cf7258e669b11fcc9cae63cdc1bcda92d",
+  "fixture": "/private/tmp/mytuner-reset-r2-operator-InQq6f",
+  "started": "2026-11-27T08:13:23.225Z",
+  "steps": [
+    {
+      "step": "fixture-ready",
+      "port": 50335,
+      "syntheticFiles": 16
+    },
+    {
+      "step": "live-owner-cli-rejected",
+      "error": "Password for retained administrator 717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9: \nOffline reset refuses existing SQLite WAL/SHM/journal sidecar files. Complete normal recovery and a clean server shutdown first."
+    },
+    {
+      "step": "role-denied",
+      "role": "unauthenticated",
+      "method": "GET",
+      "path": "/api/admin/reset/options",
+      "status": 401
+    },
+    {
+      "step": "role-denied",
+      "role": "unauthenticated",
+      "method": "POST",
+      "path": "/api/admin/reset/preview",
+      "status": 401
+    },
+    {
+      "step": "role-denied",
+      "role": "editor",
+      "method": "GET",
+      "path": "/api/admin/reset/options",
+      "status": 403
+    },
+    {
+      "step": "role-denied",
+      "role": "editor",
+      "method": "POST",
+      "path": "/api/admin/reset/preview",
+      "status": 403
+    },
+    {
+      "step": "role-denied",
+      "role": "viewer",
+      "method": "GET",
+      "path": "/api/admin/reset/options",
+      "status": 403
+    },
+    {
+      "step": "role-denied",
+      "role": "viewer",
+      "method": "POST",
+      "path": "/api/admin/reset/preview",
+      "status": 403
+    },
+    {
+      "step": "no-http-execution",
+      "path": "/api/admin/reset/execute",
+      "status": 404
+    },
+    {
+      "step": "no-http-execution",
+      "path": "/api/admin/reset/apply",
+      "status": 404
+    },
+    {
+      "step": "no-http-execution",
+      "path": "/api/admin/reset",
+      "status": 404
+    },
+    {
+      "step": "browser-cancel-and-source-dependencies-readonly"
+    },
+    {
+      "step": "browser-fresh-preview-current-second-admin-exact-counts",
+      "totalRecords": 24,
+      "tableRows": 45,
+      "retainedAdmin": "717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9"
+    },
+    {
+      "step": "reset-count-action-and-count-columns-one-line",
+      "width": 1440,
+      "cells": 90,
+      "regionWidth": 930,
+      "contentWidth": 930
+    },
+    {
+      "step": "reset-count-action-and-count-columns-one-line",
+      "width": 390,
+      "cells": 90,
+      "regionWidth": 318,
+      "contentWidth": 672
+    },
+    {
+      "step": "browser-preview-cannot-execute-cancel-preserves-records",
+      "requests": 3,
+      "geometry": {
+        "viewport": 390,
+        "document": 390,
+        "dialog": {
+          "x": 19,
+          "y": 42.203125,
+          "width": 352,
+          "height": 759.59375,
+          "top": 42.203125,
+          "right": 371,
+          "bottom": 801.796875,
+          "left": 19
+        },
+        "overflows": []
+      }
+    },
+    {
+      "step": "clean-sigterm-stop",
+      "code": 0,
+      "signal": null,
+      "elapsedMs": 10
+    },
+    {
+      "step": "wrong-password-no-reset",
+      "error": "Password for retained administrator 717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9: \nAdministrator identity or password was not confirmed"
+    },
+    {
+      "step": "stale-full-revision-no-reset"
+    },
+    {
+      "step": "exact-confirmation-trailing-space-rejected"
+    },
+    {
+      "step": "confirmation-eof-no-reset"
+    },
+    {
+      "step": "unsafe-backup-root-refused-no-reset"
+    },
+    {
+      "step": "selective-cli-applied-verified-backup-unselected-data-preserved",
+      "backup": "/private/tmp/mytuner-reset-r2-operator-InQq6f/data/backups/reset-snapshot-2026-11-27T08-13-26.731Z-def57216-5c9f-412f-b621-f65112f9dee6"
+    },
+    {
+      "step": "restart-old-session-revoked"
+    },
+    {
+      "step": "retained-admin-browser-sign-in-after-selective"
+    },
+    {
+      "step": "post-reset-physical-cleanup-denied",
+      "reconcile": false,
+      "status": 409
+    },
+    {
+      "step": "post-reset-physical-cleanup-denied",
+      "reconcile": true,
+      "status": 409
+    },
+    {
+      "step": "second-clean-sigint-stop",
+      "code": 0,
+      "signal": null,
+      "elapsedMs": 57
+    },
+    {
+      "step": "expired-cache-budget-and-replacement-preserve-old-files"
+    },
+    {
+      "step": "fresh-cli-keeps-explicit-second-admin-and-all-files",
+      "roots": [
+        "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-metadata",
+        "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-subtitles",
+        "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-videos"
+      ]
+    },
+    {
+      "step": "fresh-restart-sign-in-current-admin-others-removed-no-replay"
+    },
+    {
+      "step": "final-clean-stop",
+      "code": 0,
+      "signal": null,
+      "elapsedMs": 7
+    },
+    {
+      "step": "historical-source-output-overlap-refused-before-writes"
+    }
+  ],
+  "files": {
+    "before": {
+      "source-videos/R2.Independent.en.srt": "f86d2caf0b4f95bf3fd33f56e965a24c4774de1f8e655ccc1089279faae7cda3",
+      "source-videos/R2.Independent.mp4": "e6b4b549d379b2de93eaa41230030f6e4ff4a58c535fcb351ffbe5faabc41949",
+      "source-videos/R2.Independent.nfo": "d34808e46433481a0c7fe2b70ee7613badd64210ea07809476538b351263db96",
+      "source-videos/owner-video-not-indexed.mkv": "ea8433167993a556dda977ccb91606137a20eca3fc864953de9f36a40bd1ae84",
+      "source-metadata/R2.Independent.nfo": "01e92ac85e56326dc4a1a25c5080730a731cf881b21a3dee9be8dcd3270275b1",
+      "source-subtitles/R2.Independent.en.srt": "c872fda1693168eb406104f17e251baaf6f51b19cc836cae802213a85511f628",
+      "data/operator-notes.txt": "3481967d1a2e7f1bbd14c2ec17e43004de6e7889f2af69078540d1618fc5bb41",
+      "neighbor-archive.mp4": "d61154643a2ecdc1ca27c2221a1fa254fdde750a910c85ae6b363923e774e821",
+      "generated/operator-family-clip.mp4": "9c85fae1c521d6d7e671404b642cf278fc0b6e6cdf99b856bc565b62d1735892",
+      "cache/operator-file.txt": "ffa079ea06d240f8c0ebc09242b0b545a1a680ac5d3e6d3959b31a6275d1b4f8",
+      "cache/subtitles/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.vtt": "55b0a36e0d28d8e14b2f9e73f2e5ec96574f399b52bf8ae7c4ec1eab520effd0",
+      "generated/51cc272e-ec58-4869-9152-69f18e0c9834/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/conversion.mp4": "e6b4b549d379b2de93eaa41230030f6e4ff4a58c535fcb351ffbe5faabc41949",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/manifest.json": "667cab8e89ad6526dc532bfb4795bac52bc75e921983d12a25e9d2ef038e134c",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db": "a256a3360afeab8ad781463c75314913b61cc7dea9050b8a99fee5dd1d577306",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db-shm": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db-wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "after": {
+      "source-videos/R2.Independent.en.srt": "f86d2caf0b4f95bf3fd33f56e965a24c4774de1f8e655ccc1089279faae7cda3",
+      "source-videos/R2.Independent.mp4": "e6b4b549d379b2de93eaa41230030f6e4ff4a58c535fcb351ffbe5faabc41949",
+      "source-videos/R2.Independent.nfo": "d34808e46433481a0c7fe2b70ee7613badd64210ea07809476538b351263db96",
+      "source-videos/owner-video-not-indexed.mkv": "ea8433167993a556dda977ccb91606137a20eca3fc864953de9f36a40bd1ae84",
+      "source-metadata/R2.Independent.nfo": "01e92ac85e56326dc4a1a25c5080730a731cf881b21a3dee9be8dcd3270275b1",
+      "source-subtitles/R2.Independent.en.srt": "c872fda1693168eb406104f17e251baaf6f51b19cc836cae802213a85511f628",
+      "data/operator-notes.txt": "3481967d1a2e7f1bbd14c2ec17e43004de6e7889f2af69078540d1618fc5bb41",
+      "neighbor-archive.mp4": "d61154643a2ecdc1ca27c2221a1fa254fdde750a910c85ae6b363923e774e821",
+      "generated/operator-family-clip.mp4": "9c85fae1c521d6d7e671404b642cf278fc0b6e6cdf99b856bc565b62d1735892",
+      "cache/operator-file.txt": "ffa079ea06d240f8c0ebc09242b0b545a1a680ac5d3e6d3959b31a6275d1b4f8",
+      "cache/subtitles/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.vtt": "55b0a36e0d28d8e14b2f9e73f2e5ec96574f399b52bf8ae7c4ec1eab520effd0",
+      "generated/51cc272e-ec58-4869-9152-69f18e0c9834/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/conversion.mp4": "e6b4b549d379b2de93eaa41230030f6e4ff4a58c535fcb351ffbe5faabc41949",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/manifest.json": "667cab8e89ad6526dc532bfb4795bac52bc75e921983d12a25e9d2ef038e134c",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db": "a256a3360afeab8ad781463c75314913b61cc7dea9050b8a99fee5dd1d577306",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db-shm": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb",
+      "data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe/mytuner.db-wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "screenshot": [
+    "docs/ui-ux-review/reset-r2-operator-preview-1440.png",
+    "docs/ui-ux-review/reset-r2-operator-preview-390.png",
+    "docs/ui-ux-review/reset-r2-operator-choices-390.png",
+    "docs/ui-ux-review/reset-r2-operator-after-fresh-restart.png"
+  ],
+  "sourceHashes": {
+    "src/reset-cli.ts": "eed790214a6e13434eeafdc52a530bf83fe1034acaaa3344c7855555b85daad5",
+    "src/reset-offline.ts": "7981f20cbe5dd43d0855ecb63bb7fb147bbe52e80c899065fa5b7ecceaca3b18",
+    "src/reset-backup.ts": "e967c724d918afd933cf76406d0063c167d316d74eb4b2244d882a1261ae5a1a",
+    "src/reset-data.ts": "28810ac4f35f4d832d3c6c4a2b34793767715c2979f96ce22df15cc622f4fcca",
+    "src/reset-routes.ts": "006fc9978aa78808d656506db2446c66497503314cb19494a12858cebacb7f5e",
+    "src/storage-safety.ts": "f28015fbca64893469293dccdba95a4ddc80bd939d75abef90b6f0379c576f68",
+    "src/main.ts": "3b805b2f6918b0a57bdf7fadcf082f18d65345808c550abcd92752367c74dc66",
+    "src/recovery.ts": "ce0b08f6af603d1d06d8652c3e5a7bd7ab4f8a4a28b42d308284d06b672d91cd",
+    "web/src/ResetData.tsx": "872f6125373f4d774d747e5a41e40c2c90bf824ce47aafc17e7d55bcc147af17",
+    "web/src/styles.css": "57b600be7a0cf70dc2c65163f036c48b5674ae03c4b8cd4fff9127619f4fd8d7",
+    "docs/OPERATIONS.md": "8ae7a043ae613786410fc50cc3a131db70133afba831685f4a9d5007091a133e"
+  },
+  "port": 50335,
+  "accounts": {
+    "first": "76cc5fa4-f49a-4b0f-ace2-2b4755730851",
+    "second": "717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9",
+    "editor": "e4e999c6-c86a-4d46-aa5c-36244fec8638",
+    "viewer": "e6c03034-0c6f-483b-8117-09d546341ad9"
+  },
+  "oldBackup": "/private/tmp/mytuner-reset-r2-operator-InQq6f/data/backups/snapshot-2026-11-27T08-13-23.459Z-22d7d377-06be-48cf-b723-606ed00901fe",
+  "countColumnLayouts": [
+    {
+      "width": 1440,
+      "regionWidth": 930,
+      "contentWidth": 930,
+      "cells": [
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "4",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "3",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Keep",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        }
+      ]
+    },
+    {
+      "width": 390,
+      "regionWidth": 318,
+      "contentWidth": 672,
+      "cells": [
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Update",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "4",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "1",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "3",
+          "lines": 1
+        },
+        {
+          "text": "Remove",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        },
+        {
+          "text": "Keep",
+          "lines": 1
+        },
+        {
+          "text": "0",
+          "lines": 1
+        }
+      ]
+    }
+  ],
+  "geometry": {
+    "viewport": 390,
+    "document": 390,
+    "dialog": {
+      "x": 19,
+      "y": 42.203125,
+      "width": 352,
+      "height": 759.59375,
+      "top": 42.203125,
+      "right": 371,
+      "bottom": 801.796875,
+      "left": 19
+    },
+    "overflows": []
+  },
+  "browserRequests": [
+    {
+      "method": "GET",
+      "path": "/api/admin/reset/options",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/api/admin/reset/options",
+      "body": null
+    },
+    {
+      "method": "POST",
+      "path": "/api/admin/reset/preview",
+      "body": {
+        "mode": "fresh",
+        "categories": [],
+        "retainedAdminId": "717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9"
+      }
+    }
+  ],
+  "browserSessionCookieName": ["mytuner_session"],
+  "selectiveReceipt": {
+    "reset": true,
+    "retainedAdmin": {
+      "id": "717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9",
+      "username": "zzz_retained_admin"
+    },
+    "effectiveCategories": ["activity"],
+    "filesystemCleanupDisabled": true,
+    "sessionsEnded": true,
+    "backup": {
+      "directory": "/private/tmp/mytuner-reset-r2-operator-InQq6f/data/backups/reset-snapshot-2026-11-27T08-13-26.731Z-def57216-5c9f-412f-b621-f65112f9dee6",
+      "verified": true,
+      "schemaVersion": 21,
+      "fingerprint": "7accfcf999ba426fde12963590be333aca0917ba185202d59a5b447d77d3a4cb"
+    },
+    "instructions": [
+      "This browser page reviews database records only. It cannot execute or queue a reset.",
+      "Stop the myTuner server/container completely before running the offline preview command in the same configured data directory.",
+      "The offline tool asks for the named administrator’s password, recomputes exact counts and prints a full revision. Run its apply command with that offline revision, then type the displayed confirmation.",
+      "Apply always creates and verifies a new recoverable backup before one foreign-key-checked database transaction. Failed or incomplete backup bundles are retained; no file cleanup is run.",
+      "All account/device sessions and pairing codes are revoked. Restart myTuner and sign in with the retained administrator’s existing username/password.",
+      "Original files, generated outputs, cache files and existing backups remain in place. Historical read-only roots remain protected and physical output cleanup is disabled after reset."
+    ]
+  },
+  "freshReceipt": {
+    "reset": true,
+    "retainedAdmin": {
+      "id": "717f1137-9dfa-4fc3-b5aa-b2458a4ec1c9",
+      "username": "zzz_retained_admin"
+    },
+    "effectiveCategories": [
+      "metadata",
+      "custom",
+      "catalog",
+      "sources",
+      "collections",
+      "channels",
+      "activity",
+      "accounts"
+    ],
+    "filesystemCleanupDisabled": true,
+    "sessionsEnded": true,
+    "backup": {
+      "directory": "/private/tmp/mytuner-reset-r2-operator-InQq6f/data/backups/reset-snapshot-2026-11-27T08-13-27.795Z-dda08493-80ae-460d-a7b2-38f792be66bc",
+      "verified": true,
+      "schemaVersion": 21,
+      "fingerprint": "c462e6c8450bdd1be99f7db62854666d299f99b0797b3c0633cf944cb81036c5"
+    },
+    "instructions": [
+      "This browser page reviews database records only. It cannot execute or queue a reset.",
+      "Stop the myTuner server/container completely before running the offline preview command in the same configured data directory.",
+      "The offline tool asks for the named administrator’s password, recomputes exact counts and prints a full revision. Run its apply command with that offline revision, then type the displayed confirmation.",
+      "Apply always creates and verifies a new recoverable backup before one foreign-key-checked database transaction. Failed or incomplete backup bundles are retained; no file cleanup is run.",
+      "All account/device sessions and pairing codes are revoked. Restart myTuner and sign in with the retained administrator’s existing username/password.",
+      "Original files, generated outputs, cache files and existing backups remain in place. Historical read-only roots remain protected and physical output cleanup is disabled after reset."
+    ]
+  },
+  "safety": {
+    "state": {
+      "id": 1,
+      "cleanup_disabled": 1,
+      "output_writes_disabled": 0,
+      "reset_ms": 1795767207818
+    },
+    "roots": [
+      "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-metadata",
+      "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-subtitles",
+      "/private/tmp/mytuner-reset-r2-operator-InQq6f/source-videos"
+    ]
+  },
+  "fileCount": 16,
+  "completed": "2026-11-27T08:13:28.741Z",
+  "result": "PASS",
+  "fixtureRemoved": true
+}

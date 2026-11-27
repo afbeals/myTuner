@@ -323,9 +323,9 @@ test("idle playlists launch no encoder and concurrent requests share normalized 
     f.playback,
     join(f.root, "silent-cache"),
     512 * 1024 * 1024,
-    async (args, signal) => {
+    async (args, signal, output) => {
       calls++;
-      await runFFmpeg(args, signal);
+      await runFFmpeg(args, signal, output);
     },
   );
   t.after(() => streaming.stop());

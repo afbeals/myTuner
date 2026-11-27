@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page, type Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8791" });
@@ -8,6 +9,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -17,13 +19,16 @@ async function show(page: Page) {
   await page
     .getByRole("article")
     .filter({ hasText: "Orbit Patrol" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
 }
 async function video(page: Page) {
   await show(page);
   await page
-    .getByRole("button", { name: "Details for The Last Platform", exact: true })
+    .getByRole("button", {
+      name: "Details for The Last Platform · TV shows · Orbit.S01E01.mp4",
+      exact: true,
+    })
     .click();
   return page.getByRole("dialog", { name: "Video details", exact: true });
 }
@@ -150,6 +155,9 @@ for (const kind of [
         name: "Manage Living Room",
         exact: true,
       });
+      await modal
+        .getByText("Check an account’s saved access", { exact: true })
+        .click();
       panel = modal.locator("section").filter({
         has: page.getByRole("heading", {
           name: "Explain account access",
@@ -159,12 +167,18 @@ for (const kind of [
     } else {
       await page.goto("/#sources");
       await page
-        .getByRole("button", { name: "Configure TV shows", exact: true })
+        .locator("section.panel")
+        .filter({
+          has: page.getByRole("heading", { name: "TV shows", exact: true }),
+        })
+        .getByRole("button", { name: "Scan and refresh", exact: true })
         .click();
-      modal = page.getByRole("dialog", {
-        name: "Configure TV shows",
-        exact: true,
-      });
+      modal = page.getByRole("dialog", { name: "Scan TV shows", exact: true });
+      await modal
+        .getByText("Metadata import history and mapping checks", {
+          exact: true,
+        })
+        .click();
       panel = modal.locator("section").filter({
         has: page.getByRole("heading", {
           name: "Mapping and import review",
@@ -179,7 +193,7 @@ for (const kind of [
     if (kind === "metadata")
       await expect(
         panel.getByRole("button", { name: "Save information" }),
-      ).toHaveCount(0);
+      ).toBeDisabled();
     f.set(503);
     await expect(panel.getByRole("alert")).toContainText("503 failure");
     retry = panel.getByRole("button", { name: "Try again", exact: true });
@@ -220,6 +234,7 @@ for (const kind of [
 test("TV approval reviews exact identity, guards double submission and recovers expired and offline approval", async ({
   page,
 }) => {
+  await page.clock.setFixedTime(new Date("2026-11-26T20:00:00Z"));
   await login(page);
   await page.goto("/#connect-tv");
   await page.getByLabel("TV connection code").fill("ABCDE12345");
@@ -227,16 +242,16 @@ test("TV approval reviews exact identity, guards double submission and recovers 
   await page.getByRole("button", { name: "Review TV", exact: true }).click();
   await expect.poll(f.calls).toBe(1);
   await expect(
-    page.getByRole("button", { name: "Saving…", exact: true }),
+    page.getByRole("button", { name: "Checking…", exact: true }),
   ).toBeDisabled();
   f.set(410);
-  await expect(page.getByRole("alert")).toContainText("410 failure");
+  await expect(page.getByRole("alert")).toContainText("expired");
   await page.unroute("**/api/auth/pairings/review");
   await page.route("**/api/auth/pairings/review", (route) =>
     route.fulfill({
       json: {
         deviceName: "Recognized synthetic family television",
-        expiresMs: 1893456000000,
+        expiresMs: Date.parse("2026-11-26T20:05:00Z"),
       },
     }),
   );
@@ -259,10 +274,33 @@ test("TV approval reviews exact identity, guards double submission and recovers 
   await expect(
     page.getByRole("status").filter({ hasText: "TV approved" }),
   ).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "Cancel approval", exact: true })
-    .click();
   await expect(review).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Approve TV", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Review TV", exact: true }).click();
+  await expect(review).toBeVisible();
+  await page.unroute("**/api/auth/pairings/approve");
+  await page.route("**/api/auth/pairings/approve", (route) =>
+    route.abort("connectionfailed"),
+  );
+  await page.getByRole("button", { name: "Approve TV", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Approval could not be confirmed",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Check your TV", exact: true }),
+  ).toBeVisible();
+  await expect(review).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Approve TV", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Enter a new code", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Review TV", exact: true }),
+  ).toBeVisible();
 });
 test("operations distinguishes unscheduled failed, interrupted and never-checked sources", async ({
   page,

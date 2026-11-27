@@ -1,3 +1,7 @@
+import {
+  assertOutputCleanupAllowed,
+  assertSafeOutputRoot,
+} from "./storage-safety.js";
 import { createHash } from "node:crypto";
 import { lstat, opendir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -49,6 +53,8 @@ export async function reconcileAssets(
   check: () => void,
 ) {
   check();
+  assertSafeOutputRoot(store, root);
+  if (!dryRun) assertOutputCleanupAllowed(store);
   const files = new Map<string, File>();
   let count = 0;
   async function walk(relative: string, depth: number) {
@@ -177,6 +183,7 @@ export async function reconcileAssets(
   );
   for (const action of actions) {
     check();
+    assertOutputCleanupAllowed(store);
     const current = await lstat(join(root, action.path)).catch((error) => {
       if (error.code === "ENOENT") return null;
       throw error;
@@ -222,6 +229,8 @@ export async function reconcileAssets(
         action.path,
       );
       check();
+      assertSafeOutputRoot(store, root);
+      assertOutputCleanupAllowed(store);
       await rm(path);
       report.removedFiles++;
     }

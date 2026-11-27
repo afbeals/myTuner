@@ -4,7 +4,7 @@ import { basename, dirname, extname, join } from "node:path";
 import { z } from "zod";
 import type { Store } from "./database.js";
 import type { Media, Source } from "./domain.js";
-import { invariant } from "./domain.js";
+import { DomainError, invariant } from "./domain.js";
 import { canonicalPath, containsPath, safeMediaPath } from "./catalog.js";
 import { normalizeSubtree, sourceById } from "./security.js";
 
@@ -190,7 +190,7 @@ export function advertisedSubtitles(
       timeBasis: "source-media",
     }));
 }
-export async function configureSubtitles(
+export async function prepareSubtitleConfiguration(
   store: Store,
   sourceId: string,
   revision: number,
@@ -200,6 +200,11 @@ export async function configureSubtitles(
 ) {
   authorize();
   const source = sourceById(store, sourceId);
+  const registry = () =>
+    JSON.stringify(
+      store.db.prepare("SELECT id,root_path FROM sources ORDER BY id").all(),
+    );
+  const preparedRegistry = registry();
   invariant(
     (source.subtitle_revision ?? 0) === revision,
     409,
@@ -211,8 +216,13 @@ export async function configureSubtitles(
     400,
     "Subtitle folders must be relative subdirectories",
   );
-  const root = config.root === null ? null : await realpath(config.root);
-  if (root !== null) {
+  const root =
+    config.root === null
+      ? null
+      : config.root === source.subtitle_root
+        ? config.root
+        : await realpath(config.root);
+  if (root !== null && root !== source.subtitle_root) {
     invariant(
       (await stat(root)).isDirectory(),
       400,
@@ -238,30 +248,60 @@ export async function configureSubtitles(
       );
     }
   }
-  authorize();
-  const changed = store.db
-    .prepare(
-      "UPDATE sources SET subtitle_root=?,subtitle_config=?,subtitle_revision=subtitle_revision+1 WHERE id=? AND subtitle_revision=?",
-    )
-    .run(
-      root,
-      JSON.stringify({
-        enabled: config.enabled,
-        subdirectories: folders,
-        maxDepth: config.maxDepth,
-      }),
-      sourceId,
-      revision,
-    ).changes;
-  invariant(
-    changed === 1,
-    409,
-    "Subtitle settings changed; reload before saving",
-  );
-  return {
-    ...subtitleConfig(sourceById(store, sourceId)),
-    revision: revision + 1,
+  return () => {
+    authorize();
+    invariant(
+      sourceById(store, sourceId).root_path === source.root_path,
+      409,
+      "Source changed; reload before saving subtitle settings",
+    );
+    invariant(
+      registry() === preparedRegistry,
+      409,
+      "Media source directories changed while checking subtitle settings; review and save again",
+    );
+    const changed = store.db
+      .prepare(
+        "UPDATE sources SET subtitle_root=?,subtitle_config=?,subtitle_revision=subtitle_revision+1 WHERE id=? AND subtitle_revision=?",
+      )
+      .run(
+        root,
+        JSON.stringify({
+          enabled: config.enabled,
+          subdirectories: folders,
+          maxDepth: config.maxDepth,
+        }),
+        sourceId,
+        revision,
+      ).changes;
+    invariant(
+      changed === 1,
+      409,
+      "Subtitle settings changed; reload before saving",
+    );
+    return {
+      ...subtitleConfig(sourceById(store, sourceId)),
+      revision: revision + 1,
+    };
   };
+}
+export async function configureSubtitles(
+  store: Store,
+  sourceId: string,
+  revision: number,
+  config: SubtitleConfig,
+  writableRoots: string[],
+  authorize: () => void,
+) {
+  const commit = await prepareSubtitleConfiguration(
+    store,
+    sourceId,
+    revision,
+    config,
+    writableRoots,
+    authorize,
+  );
+  return commit();
 }
 export async function resolveSubtitle(
   source: Source,
@@ -270,11 +310,26 @@ export async function resolveSubtitle(
   const root =
     candidate.rootKind === "media" ? source.root_path : source.subtitle_root;
   invariant(root, 400, "Configure a subtitle root first");
-  const path = await safeMediaPath(
-    { ...source, root_path: root },
-    candidate.relativePath,
-  );
-  const info = await stat(path);
+  let path: string;
+  let info: Awaited<ReturnType<typeof stat>>;
+  try {
+    path = await safeMediaPath(
+      { ...source, root_path: root },
+      candidate.relativePath,
+    );
+    info = await stat(path);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      ["ENOENT", "ENOTDIR"].includes(String(error.code))
+    )
+      throw new DomainError(
+        404,
+        "Subtitle file not found. Check the relative filename and selected subtitle location, then try again.",
+      );
+    throw error;
+  }
   invariant(
     extensions.has(extname(path).toLowerCase()),
     422,

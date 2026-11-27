@@ -1,6 +1,6 @@
 # Windows 11 Docker build and acceptance
 
-Use the existing Windows Docker Desktop workflow used by the owner's Finapp and Tide projects. No Docker installation on the Mac is required. The first reported Windows run built successfully and passed storage, runtime, bootstrap and media gates, then timed out during backup verification. Full Windows acceptance remains pending; rerun with the 0.2.1 read-only verification fix.
+Use the existing Windows Docker Desktop workflow used by the owner's Finapp and Tide projects. No Docker installation on the Mac is required. The first reported Windows run built successfully and passed storage, runtime, bootstrap and media gates, then timed out during backup verification. Full Windows acceptance remains pending; rerun the current 0.3.0 candidate, which retains the 0.2.1 read-only verification fix. A successful older report cannot promote changed source/image inputs.
 
 ## Docker shortcuts
 
@@ -104,7 +104,7 @@ Get-FileHash ".\mytuner-$myTunerVersion.tar" -Algorithm SHA256
 
 Keep the large archive outside the checkout afterward. Transfer it privately and run `docker image load --input /actual/path/mytuner-VERSION.tar` on Unraid. Verify the loaded image ID equals the accepted report. A Windows-local image is not automatically installed on Unraid. Do not rebuild between acceptance and transfer.
 
-Use [deployment](DEPLOYMENT.md) for actual Unraid mounts, bootstrap and operation. Keep the matching checkout/Compose file for one-off maintenance commands. For the accepted-image route, use `docker compose up -d --no-build`; do not accidentally replace it with a locally rebuilt candidate.
+Use [Unraid Docker-tab setup](UNRAID_DOCKER_TAB.md) for the preferred actual mounts, stopped-server bootstrap and manual operation. No Compose installation or checkout is needed on Unraid for that route. [Deployment](DEPLOYMENT.md) covers optional CLI/Compose maintenance; if using Compose, retain the matching file and use `docker compose up -d --no-build` with the accepted image so a local rebuild does not replace the tested candidate.
 
 ## Backup verification timeout after a successful build
 

@@ -10,6 +10,8 @@ import {
   refreshAccount,
 } from "../src/security.js";
 import {
+  accountConfiguration,
+  saveAccountConfiguration,
   PairingService,
   updateAccount,
   changePassword,
@@ -615,5 +617,137 @@ test("concurrent case-equivalent account creation returns one 201 and one 409", 
       .prepare("SELECT COUNT(*) AS n FROM accounts WHERE username='newaccount'")
       .get()?.n,
     1,
+  );
+});
+
+test("unchanged account saves preserve authenticated sessions but real changes revoke", async (t) => {
+  const f = await fixture(t),
+    session = await login(f.store, "owner", "test-password");
+  updateAccount(f.store, f.admin, f.owner.id, {
+    role: "editor",
+    disabled: false,
+  });
+  assert.equal(authenticate(f.store, session.token).id, f.owner.id);
+  updateAccount(f.store, f.admin, f.owner.id, { role: "viewer" });
+  assert.throws(() => authenticate(f.store, session.token), /Authentication/);
+});
+
+test("combined account save is atomic for settings and password, and rejects stale drafts", async (t) => {
+  const f = await fixture(t),
+    configuration = accountConfiguration(f.store, f.admin, f.owner.id);
+  await saveAccountConfiguration(f.store, f.admin, f.owner.id, {
+    revision: configuration.revision,
+    role: "viewer",
+    disabled: false,
+    password: "atomic-new-password",
+  });
+  assert.equal(
+    (await login(f.store, "owner", "atomic-new-password")).account.role,
+    "viewer",
+  );
+  await assert.rejects(
+    saveAccountConfiguration(f.store, f.admin, f.owner.id, {
+      revision: configuration.revision,
+      role: "editor",
+      disabled: false,
+    }),
+    /changed elsewhere/,
+  );
+  const adminConfig = accountConfiguration(f.store, f.admin, f.admin.id);
+  await assert.rejects(
+    saveAccountConfiguration(f.store, f.admin, f.admin.id, {
+      revision: adminConfig.revision,
+      role: "viewer",
+      disabled: false,
+      password: "must-not-be-saved",
+    }),
+    /last enabled/,
+  );
+  assert.equal(
+    (await login(f.store, "admin", "test-password")).account.role,
+    "admin",
+  );
+  await assert.rejects(
+    login(f.store, "admin", "must-not-be-saved"),
+    /credentials/,
+  );
+});
+
+test("session metadata is scoped to its owner and activity writes are throttled", async (t) => {
+  const f = await fixture(t),
+    now = Date.now(),
+    result = await login(f.store, "owner", "test-password", now),
+    actor = authenticate(f.store, result.token, now),
+    headers = { authorization: `Bearer ${result.token}` },
+    hash = actor.sessionHash!;
+  assert.equal(
+    f.store.db
+      .prepare(
+        "SELECT created_ms,last_used_ms FROM sessions WHERE token_hash=?",
+      )
+      .get(hash)!.created_ms,
+    now,
+  );
+  const changes = () =>
+      Number(f.store.db.prepare("SELECT total_changes() AS n").get()!.n),
+    before = changes();
+  authenticate(f.store, result.token, now + 14 * 60_000);
+  assert.equal(changes(), before);
+  authenticate(f.store, result.token, now + 15 * 60_000);
+  assert.equal(changes(), before + 1);
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "PATCH",
+        url: `/api/auth/sessions/${hash}`,
+        headers,
+        payload: { label: "Office browser" },
+      })
+    ).statusCode,
+    204,
+  );
+  const own = (
+    await f.app.inject({ url: "/api/auth/sessions", headers })
+  ).json();
+  assert.equal(
+    own.find((session: { id: string }) => session.id === hash).label,
+    "Office browser",
+  );
+  assert.ok(own.every((session: { id: string }) => session.id === hash));
+  const adminSessions = (
+    await f.app.inject({ url: "/api/auth/sessions", headers: f.headers })
+  ).json();
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "PATCH",
+        url: `/api/auth/sessions/${adminSessions[0].id}`,
+        headers,
+        payload: { label: "Cannot change another account" },
+      })
+    ).statusCode,
+    404,
+  );
+});
+test("approved TV display name is retained only on its resulting session", async (t) => {
+  const f = await fixture(t),
+    service = new PairingService(f.store),
+    pair = service.start("Living room Fire TV", "local"),
+    before = f.store.db.prepare("SELECT COUNT(*) AS n FROM sessions").get()!.n;
+  service.approve(f.owner, pair.userCode);
+  const result = service.poll(pair.deviceCode);
+  assert.equal(result.status, "approved");
+  if (result.status !== "approved") throw new Error("Expected approval");
+  const actor = authenticate(f.store, result.token),
+    session = f.store.db
+      .prepare(
+        "SELECT label,created_ms,last_used_ms FROM sessions WHERE token_hash=?",
+      )
+      .get(actor.sessionHash!);
+  assert.equal(session!.label, "Living room Fire TV");
+  assert.ok(Number(session!.created_ms) > 0);
+  assert.equal(
+    f.store.db.prepare("SELECT COUNT(*) AS n FROM sessions").get()!.n,
+    Number(before) + 1,
   );
 });

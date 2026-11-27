@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import type { Programming, Source } from "../web/src/types";
 
@@ -10,7 +12,10 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await selectInitialProfile(page);
+  await expect(
+    page.getByRole("navigation", { name: "Main navigation", exact: true }),
+  ).toBeAttached();
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -86,16 +91,19 @@ test("stored video details and routing inspection are read-only and fit desktop/
       json: { ...data, checkedMs: 1794168000000 },
     });
   });
-  await page.getByRole("link", { name: "Library", exact: true }).click();
+  await page.getByRole("link", { name: "My Network", exact: true }).click();
   await page
     .getByRole("article")
     .filter({
       has: page.getByRole("heading", { name: "Orbit Patrol", exact: true }),
     })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await page
-    .getByRole("button", { name: "Details for The Last Platform", exact: true })
+    .getByRole("button", {
+      name: "Details for The Last Platform · TV shows · Orbit.S01E01.mp4",
+      exact: true,
+    })
     .click();
   const dialog = page.getByRole("dialog", {
     name: "Video details",
@@ -128,7 +136,7 @@ test("stored video details and routing inspection are read-only and fit desktop/
   await dialog.getByRole("button", { name: "Close dialog" }).click();
   await expect(
     page.getByRole("button", {
-      name: "Details for The Last Platform",
+      name: "Details for The Last Platform · TV shows · Orbit.S01E01.mp4",
       exact: true,
     }),
   ).toBeFocused();
@@ -153,7 +161,11 @@ test("collection dependencies link to read-only channel details and survive relo
     page,
     `/api/profiles/${f.profileId}/collections`,
     "POST",
-    { name: "R6 dependency collection", mediaIds: [f.videos[0]!.id] },
+    {
+      creationId: randomUUID(),
+      name: "R6 dependency collection",
+      mediaIds: [f.videos[0]!.id],
+    },
   );
   const channel = await mutate(page, "/api/channels", "POST", {
     profileId: f.profileId,
@@ -276,18 +288,30 @@ test("retiring every commercial is a draft change until preview/publication and 
     .locator(".channel-preview")
     .getByRole("button", { name: "Edit programming" })
     .click();
-  await page.getByRole("button", { name: "Commercials", exact: true }).click();
-  const eligibility = page.locator(".commercial-eligibility");
+  await page
+    .getByRole("button", { name: "2. Commercials", exact: true })
+    .click();
+  const eligibility = page
+    .getByRole("dialog")
+    .locator("section.settings-section")
+    .filter({
+      has: page.getByRole("heading", {
+        name: "Commercial choices",
+        exact: true,
+      }),
+    });
   await expect(eligibility.getByRole("checkbox")).toHaveCount(1);
   await eligibility.getByRole("checkbox").uncheck();
-  await expect(page.getByRole("dialog")).toContainText("0 eligible of 1");
+  await expect(page.getByRole("dialog")).toContainText(
+    "0 eligible on this page · 1 available in the pool",
+  );
   let saved = await page.evaluate(
     async (id) =>
       (await (await fetch(`/api/channels/${id}/programming`)).json()).config,
     channel.id,
   );
   expect(saved.disabledCommercialIds ?? []).toEqual([]);
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "3. Preview", exact: true }).click();
   await page.getByRole("button", { name: "Generate two-hour preview" }).click();
   await expect(page.getByRole("dialog").getByRole("table")).toBeVisible();
   await expect(
@@ -305,13 +329,20 @@ test("retiring every commercial is a draft change until preview/publication and 
     channel.id,
   );
   expect(saved.disabledCommercialIds).toHaveLength(1);
-  await page.getByRole("button", { name: "Commercials", exact: true }).click();
+  await page
+    .getByRole("button", { name: "2. Commercials", exact: true })
+    .click();
   await eligibility.getByRole("checkbox").check();
-  await expect(page.getByRole("dialog")).toContainText("1 eligible of 1");
-  page.once("dialog", (dialog) => dialog.dismiss());
+  await expect(page.getByRole("dialog")).toContainText(
+    "1 eligible on this page · 1 available in the pool",
+  );
   await page.evaluate(() => {
     location.hash = "library";
   });
+  await page
+    .locator("dialog.confirmation-dialog")
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(eligibility.getByRole("checkbox")).toBeChecked();
 });
@@ -491,6 +522,7 @@ test("resource links continue through sign-in and profile PIN without tuning, an
     .getByLabel("Password", { exact: true })
     .fill("synthetic-viewer-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await expect(
     page.getByRole("heading", { name: "Unlock Living Room", exact: true }),
   ).toBeVisible();
@@ -509,6 +541,7 @@ test("resource links continue through sign-in and profile PIN without tuning, an
     .getByLabel("Password", { exact: true })
     .fill("synthetic-viewer-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await expect(page.getByRole("alert")).toContainText("unavailable");
   await expect(page.getByRole("main")).not.toContainText(hiddenName);
   expect(joins).toBe(0);

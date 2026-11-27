@@ -227,6 +227,15 @@ ${["INSERT", "UPDATE", "DELETE"]
  END;`;
   })
   .join("\n")}`,
+  `ALTER TABLE channels ADD creation_hash TEXT;
+ALTER TABLE sessions ADD label TEXT;
+ALTER TABLE sessions ADD created_ms INTEGER;
+ALTER TABLE sessions ADD last_used_ms INTEGER;`,
+  `CREATE TABLE storage_safety_state(
+ id INTEGER PRIMARY KEY CHECK(id=1), cleanup_disabled INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_disabled IN(0,1)), output_writes_disabled INTEGER NOT NULL DEFAULT 0 CHECK(output_writes_disabled IN(0,1)), reset_ms INTEGER
+);
+INSERT INTO storage_safety_state(id,cleanup_disabled) VALUES(1,0);
+CREATE TABLE protected_source_roots(path TEXT PRIMARY KEY);`,
 ];
 
 export const schemaVersion = migrations.length;

@@ -446,3 +446,56 @@ The [ranked register](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposit
 - [x] N119 Route production library/media/options pages through one bounded read-only worker; preserve device/PIN/grant checks, disconnect cancellation, main-thread responsiveness and shutdown ordering.
 - [x] N120 Add explicit read-only directory validation with bounded extension samples, honest incomplete feedback and stale-draft/authority guards; do not traverse while typing/opening.
 - [x] N121 Verify file-backed 8k+ mixed catalogs beyond the old raw-metadata limit, permission/parity/cancellation/failure/restart behavior, compiled worker loading and browser/visual regressions. The separate 9k fixture includes 8k TV episodes; measurements and operator limits are in VERIFICATION.md/LARGE_LIBRARY.md. Target-host timing remains N117.
+
+## UI/UX investigation — owner alignment required before implementation
+
+- [x] UX-R01 Capture the owner’s Generation/Sources/Accounts/Profiles/Watch/Subscriptions/Channels/Library and global notes with traceable IDs in UI_UX_OWNER_NOTES.md.
+- [x] UX-R02 Complete two independent live subagent reviews for all 14 application page surfaces, including nested flows and desktop/narrow evidence; mark limitations explicitly.
+- [x] UX-R03 Complete additional targeted reviews for complex source configuration and catalog/channel/search/cart/privacy changes, plus shared-component/global reviews.
+- [x] UX-R04 Consolidate a nested per-page and global backlog with priorities, evidence and decisions. Shared component construction is global; adoption tasks remain per page and repeated local fixes stay local.
+- [x] UX-R05 Owner approved every review item as P0 delivery scope and accepted the recommended decisions on 2026-11-26; implementation is tracked in UI_UX_IMPLEMENTATION.md.
+
+[The review matrix and backlog](UI_UX_REVIEW.md) is the status register for this work.
+
+## UI/UX overhaul acceptance — 2026-11-26
+
+Every requirement, including the prior optional recommendations, in [the agreed page/global backlog](UI_UX_REVIEW.md) is required. [Accepted behavior/phases](UI_UX_IMPLEMENTATION.md) and [the new UI PNG gallery](UI_UX_PREVIEWS.md) accompany this work.
+
+- [x] Implement the principal hub/wizard/tray, atomic configuration, shared dialog/tree/confirmation and revised management/watch/support surfaces.
+- [x] Complete a six-reviewer implementation round and correct the confirmed source, startup, native-error, stale-reload, selection and folder-admission findings.
+- [x] Reconcile the full required backlog against the actual implementation; record the remaining adoption gaps before declaring completion.
+- [x] Finish all reconciliation gaps, including per-row mapping feedback, sticky generation/deletion actions, credential task/visibility controls, named library save feedback and support-page focus/copy adoption.
+- [x] Full backend regression (456), native offline JVM/build/lint (24 tests), compiled lifecycle and synthetic 8,000-item performance checks pass. See the dated verification entry for limits.
+- [x] Finish existing browser-scenario adaptation and run the full functional/accessibility suite: 117 tests passed across the three CI shards.
+- [x] Review all 93 macOS desktop/narrow baselines and rerun comparison-mode visual regression without weakening assertions or tolerances; final affected comparisons passed.
+- [x] Reconcile all 119 page/global entries with implementation and local evidence in [the full trace](UI_UX_COVERAGE.md); distinguish 117 implementation entries from two investigated/unreproduced reports.
+
+No commit, push, PR, deployment, new software installation or emulator run is implied by these implementation/verification checkboxes.
+
+## Household scenario walkthroughs — 2026-11-26
+
+Owner approved all eight scenarios, with two independent passes each for1,2and4 (11 passes). [The scenario register](UI_UX_SCENARIO_REVIEW.md) records assignments, evidence and runtime limits. All confirmed findings are now approved for fixes after the unchanged-build reviews; no severity-based selection is needed.
+
+- [x] 1A Empty household setup
+- [x] 1B Empty household setup, independent repeat
+- [x] 2A Multiple users/private channels
+- [x] 2B Multiple users/private channels, independent repeat
+- [x] 3 Editing an active/paused broadcast
+- [x] 4A Mistakes, interruptions and conflicts
+- [x] 4B Mistakes, interruptions and conflicts, independent repeat
+- [x] 5 Library maintenance
+- [x] 6 Large background jobs
+- [x] 7 Subtitles and alternate audio
+- [x] 8 TV remote investigation complete; physical runtime remains unverified and emulator deferral preserved
+
+## Database-only reset and media safety — owner authorized
+
+- [x] Implement administrator preview, explicit retained-account identity, selective categories/dependencies and exact counts.
+- [x] Implement offline exclusive reset with password/typed confirmation, verified append-only backup and transactional database-only mutation.
+- [x] Preserve prior readonly media/metadata/subtitle roots and prevent later cleanup from deleting retained output files after catalog reset.
+- [x] Complete synthetic sentinel/hash/auth/concurrency/rollback/restart coverage; no household data used.
+- [x] Complete three independent reset review passes in round 1; fix every confirmed issue.
+- [x] Complete three new independent reset review passes in round 2; fix every confirmed issue.
+- [x] Repeat affected/full regression, browser/visual/CI-equivalent checks and finish operator/API/database documentation.
+
+See [reset design](RESET_DATA_PROPOSAL.md), [safety review and evidence](RESET_SAFETY_REVIEW.md), and [walkthrough fix coverage](UI_UX_FIX_COVERAGE.md).

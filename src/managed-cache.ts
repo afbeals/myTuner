@@ -1,15 +1,8 @@
+import { writeFile as writeDescriptor } from "node:fs";
+import { OutputPaths } from "./output-paths.js";
+import { outputCleanupDisabled, type SafetyStore } from "./storage-safety.js";
 import { randomUUID } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  opendir,
-  readFile,
-  rename,
-  rm,
-  statfs,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
+import { lstat, opendir, readFile, rm, statfs, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { invariant } from "./domain.js";
 
@@ -18,12 +11,16 @@ import { invariant } from "./domain.js";
 export class ManagedCache {
   private tail: Promise<unknown> = Promise.resolve();
   private touched = new Map<string, number>();
+  private readonly outputs: OutputPaths;
   constructor(
     private readonly root: string,
     private readonly budget = 64 * 1024 ** 2,
     private readonly reserve = 32 * 1024 ** 2,
     private readonly ttl = 86400000,
-  ) {}
+    private readonly store?: SafetyStore,
+  ) {
+    this.outputs = new OutputPaths(root, store);
+  }
   private async exclusive<T>(work: () => Promise<T>) {
     const next = this.tail.catch(() => {}).then(work);
     this.tail = next.catch(() => {});
@@ -40,7 +37,7 @@ export class ManagedCache {
   get(name: string, check: () => void): Promise<Buffer | null> {
     return this.exclusive(async () => {
       check();
-      await mkdir(this.root, { recursive: true });
+      this.outputs.create([]);
       const path = this.path(name),
         info = await lstat(path).catch((error) => {
           if (error.code === "ENOENT") return null;
@@ -53,15 +50,15 @@ export class ManagedCache {
         "Invalid managed cache file",
       );
       if (info.mtimeMs < Date.now() - this.ttl) {
-        await rm(path);
+        if (!outputCleanupDisabled(this.store)) await rm(path);
         return null;
       }
       const bytes = await readFile(path);
       check();
       const now = Date.now();
       if (
-        now - (this.touched.get(name) ?? 0) >=
-        Math.min(60000, this.ttl / 4)
+        !outputCleanupDisabled(this.store) &&
+        now - (this.touched.get(name) ?? 0) >= Math.min(60000, this.ttl / 4)
       ) {
         await utimes(path, new Date(now), new Date(now));
         if (this.touched.size >= 512)
@@ -78,7 +75,7 @@ export class ManagedCache {
     replacement?: string,
   ) {
     check();
-    await mkdir(this.root, { recursive: true });
+    this.outputs.create([]);
     let used = 0,
       count = 0,
       replaced = 0;
@@ -132,6 +129,8 @@ export class ManagedCache {
       )
         break;
       check();
+      if (outputCleanupDisabled(this.store)) break;
+      this.outputs.capture();
       await rm(candidate.path);
       used -= candidate.size;
       free += candidate.size;
@@ -149,6 +148,7 @@ export class ManagedCache {
   }
   publish(name: string, bytes: Buffer, check: () => void) {
     return this.exclusive(async () => {
+      this.outputs.create([]);
       const path = this.path(name);
       // Existing/replacement files must also be regular managed files.
       const existing = await lstat(path).catch((error) => {
@@ -160,16 +160,25 @@ export class ManagedCache {
         409,
         "Invalid managed cache destination",
       );
+      invariant(
+        !existing || !outputCleanupDisabled(this.store),
+        409,
+        "Existing cache output is preserved after a data reset; configure a new dedicated empty cache root to replace it",
+      );
       await this.reclaim(bytes.length, check, name);
-      const temporary = path + "." + randomUUID() + ".partial";
+      const stage = this.outputs.stage(name + "." + randomUUID() + ".partial");
       try {
         check();
-        await writeFile(temporary, bytes, { flag: "wx" });
+        await new Promise<void>((resolve, reject) =>
+          writeDescriptor(stage.fd, bytes, (error) =>
+            error ? reject(error) : resolve(),
+          ),
+        );
         check();
-        await rename(temporary, path);
+        this.outputs.publish(stage, this.outputs.prepare(name, false));
         check();
       } finally {
-        await rm(temporary, { force: true });
+        this.outputs.close(stage);
       }
     });
   }

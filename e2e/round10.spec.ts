@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8791" });
@@ -8,6 +9,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await expect(page.getByLabel("Current profile")).not.toHaveValue("");
 }
 
@@ -49,7 +51,7 @@ test("R10-09 profile picker clears a locked resource link and opens the chosen p
   await expect(page.getByLabel("Current profile")).toHaveValue(b.id);
   await expect(page).toHaveURL(/\/#channels$/);
   await expect(
-    page.getByRole("heading", { name: "Channels", exact: true }),
+    page.getByRole("heading", { name: "My Network", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByText("Opening permitted profile…", { exact: true }),
@@ -64,111 +66,169 @@ test("R10-09 profile picker clears a locked resource link and opens the chosen p
   ).toEqual([]);
 });
 
-test("R10-10 scoped integration reloads preserve sibling drafts and the dismissal guard", async ({
+test("R10-10 atomic source saves preserve sibling drafts through a failed save and stage disconnection until Save", async ({
   page,
 }) => {
   await login(page);
   await page.goto("/#sources");
-  let integrationWrites = 0;
-  let savedIntegration: {
-    provider: string;
-    url: string;
-    mappings: { from: string; to: string }[];
-  } | null = {
-    provider: "sonarr",
-    url: "http://saved.local:8989",
-    mappings: [{ from: "/tv", to: "/synthetic/shows" }],
+  type Configuration = {
+    revision: string;
+    subtitles: {
+      enabled: boolean;
+      root: string | null;
+      subdirectories: string[];
+      maxDepth: number;
+    };
+    metadataRoot: string | null;
+    intervalMs: number | null;
+    integration: {
+      provider: string;
+      url: string;
+      hasApiKey?: boolean;
+      apiKey?: string;
+      mappings: { from: string; to: string }[];
+    } | null;
   };
-  await page.route("**/api/sources/*/integration", (route) => {
-    const request = route.request();
-    if (request.method() !== "GET") {
-      integrationWrites++;
-      if (request.method() === "DELETE") savedIntegration = null;
-      else {
-        const { provider, url, mappings } = request.postDataJSON();
-        savedIntegration = { provider, url, mappings };
+  let writes = 0,
+    failNext = true;
+  let saved: Configuration | null = null;
+  let submitted: Configuration | null = null;
+  await page.route("**/api/sources/*/configuration", async (route) => {
+    if (route.request().method() === "GET") {
+      if (!saved) {
+        const response = await route.fetch();
+        saved = {
+          ...(await response.json()),
+          metadataRoot: null,
+          intervalMs: null,
+          integration: {
+            provider: "sonarr",
+            url: "http://saved.local:8989",
+            hasApiKey: true,
+            mappings: [{ from: "/tv", to: "/synthetic/shows" }],
+          },
+        };
       }
+      return route.fulfill({ json: saved });
     }
-    return route.fulfill({ json: savedIntegration });
+    writes++;
+    submitted = route.request().postDataJSON();
+    if (failNext) {
+      failNext = false;
+      return route.fulfill({
+        status: 503,
+        json: { error: "Atomic configuration temporarily unavailable" },
+      });
+    }
+    const input = submitted!;
+    const integration = input.integration
+      ? { ...input.integration, hasApiKey: true }
+      : null;
+    if (integration) delete integration.apiKey;
+    saved = { ...input, revision: `synthetic-revision-${writes}`, integration };
+    return route.fulfill({ json: saved });
   });
-  // Exercise real React save/reload transitions with isolated responses; no
-  // synthetic path or credentials are sent to the fixture's integration service.
-  await page.route("**/api/sources/*/metadata-location", (route) =>
-    route.fulfill({ json: {} }),
-  );
-  await page.route("**/api/sources/*/refresh", (route) =>
-    route.fulfill({ json: {} }),
-  );
-  await page
-    .getByRole("button", { name: "Configure TV shows", exact: true })
-    .click();
-  const modal = page.getByRole("dialog");
-  const url = modal.getByLabel("Application URL", { exact: true }),
-    key = modal.getByLabel("API key", { exact: true });
+  const opener = page.getByRole("button", {
+    name: "Configure TV shows",
+    exact: true,
+  });
+  await opener.click();
+  const modal = page.getByRole("dialog", {
+    name: "Configure TV shows",
+    exact: true,
+  });
+  const url = modal.getByLabel("Sonarr address", { exact: true });
+  const key = modal.getByLabel("API key", { exact: true });
+  const applicationPath = modal.getByLabel("Application path 1", {
+    exact: true,
+  });
+  const myTunerPath = modal.getByLabel("MyTuner path 1", { exact: true });
+  const metadata = modal.getByLabel("Separate metadata directory (optional)", {
+    exact: true,
+  });
+  const folders = modal.getByLabel("Subtitle folder names", { exact: true });
   await expect(url).toHaveValue("http://saved.local:8989");
   await url.fill("http://unsaved.local:8989");
   await key.fill("synthetic-unsaved-key");
-  const mappings = modal.locator("textarea[name=mappings]");
-  await mappings.fill("/changed => /synthetic/draft");
-  const form = modal.locator("form").filter({
-    has: page.getByRole("button", {
-      name: "Save metadata integration",
-      exact: true,
-    }),
-  });
-  await modal.locator("input[name=root]").fill("/synthetic/metadata");
+  await applicationPath.fill("/changed");
+  await myTunerPath.fill("/synthetic/draft");
+  await metadata.fill("/synthetic/metadata");
+  await folders.fill("Subs, CustomCaptions");
   await modal
-    .getByRole("button", { name: "Save metadata location", exact: true })
-    .click();
-  await expect(
-    modal.getByText("Metadata location saved.", { exact: true }),
-  ).toBeVisible();
-  await modal
-    .getByRole("button", { name: "Save automatic refresh", exact: true })
-    .click();
-  await expect(
-    modal.getByRole("button", { name: "Save automatic refresh", exact: true }),
-  ).toBeEnabled();
-  await expect(url).toHaveValue("http://unsaved.local:8989");
-  await expect(key).toHaveValue("synthetic-unsaved-key");
-  await expect(mappings).toHaveValue("/changed => /synthetic/draft");
-  await expect(form).toHaveAttribute("data-form-dirty", "true");
-  expect(integrationWrites).toBe(0);
-  page.once("dialog", (d) => d.dismiss());
+    .getByRole("combobox", { name: "Scan schedule", exact: true })
+    .selectOption("automatic");
+  const minutes = modal.getByLabel("Interval in minutes", { exact: true });
+  await minutes.fill("23");
+  expect(writes).toBe(0);
   await page.keyboard.press("Escape");
+  await page
+    .locator("dialog.confirmation-dialog")
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(modal).toBeVisible();
   await expect(key).toHaveValue("synthetic-unsaved-key");
-  const minutes = modal.getByLabel("Refresh interval (minutes)", {
-    exact: true,
-  });
-  await minutes.fill("23");
-  const refreshForm = modal.locator("form").filter({
-    has: page.getByRole("button", {
-      name: "Save automatic refresh",
-      exact: true,
-    }),
-  });
   await modal
-    .getByRole("button", { name: "Save metadata integration", exact: true })
+    .getByRole("button", { name: "Save configuration", exact: true })
     .click();
+  await expect(modal.getByRole("alert")).toContainText(
+    "Atomic configuration temporarily unavailable",
+  );
+  for (const [field, value] of [
+    [url, "http://unsaved.local:8989"],
+    [key, "synthetic-unsaved-key"],
+    [applicationPath, "/changed"],
+    [myTunerPath, "/synthetic/draft"],
+    [metadata, "/synthetic/metadata"],
+    [folders, "Subs, CustomCaptions"],
+    [minutes, "23"],
+  ] as const)
+    await expect(field).toHaveValue(value);
+  await expect(modal.locator("[data-form-dirty]").first()).toHaveAttribute(
+    "data-form-dirty",
+    "true",
+  );
+  expect(writes).toBe(1);
+  await modal
+    .getByRole("button", { name: "Save configuration", exact: true })
+    .click();
+  await expect(modal).toHaveCount(0);
+  expect(writes).toBe(2);
+  expect(submitted).toMatchObject({
+    metadataRoot: "/synthetic/metadata",
+    intervalMs: 23 * 60_000,
+    subtitles: { subdirectories: ["Subs", "CustomCaptions"] },
+    integration: {
+      provider: "sonarr",
+      url: "http://unsaved.local:8989",
+      apiKey: "synthetic-unsaved-key",
+      mappings: [{ from: "/changed", to: "/synthetic/draft" }],
+    },
+  });
+  await opener.click();
   await expect(url).toHaveValue("http://unsaved.local:8989");
   await expect(key).toHaveValue("");
-  await expect(mappings).toHaveValue("/changed => /synthetic/draft");
+  await expect(key).toHaveAttribute("placeholder", "•••••••• · saved key");
+  await expect(metadata).toHaveValue("/synthetic/metadata");
   await expect(minutes).toHaveValue("23");
-  await expect(refreshForm).toHaveAttribute("data-form-dirty", "true");
-  expect(integrationWrites).toBe(1);
-  page.once("dialog", (d) => d.accept());
   await modal
-    .getByRole("button", { name: "Disconnect integration", exact: true })
+    .getByRole("button", { name: "Disconnect on save", exact: true })
     .click();
-  await expect(url).toHaveValue("");
-  await expect(key).toHaveValue("");
-  await expect(mappings).toHaveValue("");
+  await expect(url).toHaveCount(0);
+  await expect(modal).toContainText(
+    "Disconnection is staged. Cancel keeps the saved connection.",
+  );
   await expect(minutes).toHaveValue("23");
-  await expect(refreshForm).toHaveAttribute("data-form-dirty", "true");
-  expect(integrationWrites).toBe(2);
-  // The existing reviewed source form baselines remain unchanged. Accessibility
-  // and value assertions cover this additional state without capturing secrets.
+  expect(writes).toBe(2);
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .locator("dialog.confirmation-dialog")
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await expect(modal).toBeVisible();
+  await expect(
+    modal.getByRole("button", { name: "Connect Sonarr", exact: true }),
+  ).toBeVisible();
+  expect(writes).toBe(2);
   expect(
     (
       await new AxeBuilder({ page })
@@ -176,7 +236,26 @@ test("R10-10 scoped integration reloads preserve sibling drafts and the dismissa
         .analyze()
     ).violations,
   ).toEqual([]);
-  page.once("dialog", (d) => d.accept());
-  await page.keyboard.press("Escape");
+  await modal
+    .getByRole("button", { name: "Save configuration", exact: true })
+    .click();
   await expect(modal).toHaveCount(0);
+  expect(writes).toBe(3);
+  expect(submitted).toMatchObject({
+    integration: null,
+    metadataRoot: "/synthetic/metadata",
+    intervalMs: 23 * 60_000,
+    subtitles: { subdirectories: ["Subs", "CustomCaptions"] },
+  });
+  await opener.click();
+  await expect(
+    modal.getByRole("button", { name: "Connect Sonarr", exact: true }),
+  ).toBeVisible();
+  await expect(metadata).toHaveValue("/synthetic/metadata");
+  await expect(minutes).toHaveValue("23");
+  await modal
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.locator("dialog.confirmation-dialog")).toHaveCount(0);
 });

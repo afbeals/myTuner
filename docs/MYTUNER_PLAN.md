@@ -1,6 +1,6 @@
 # myTuner: standalone personal TV network
 
-Status: server/browser **0.2.2**, native TV client **0.2.0**, schema **19**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
+Status: server/browser and native TV client **0.3.0**, schema **21**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
 
 The completed [tenth-round code review](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposition) fixed two P1 issues. The owner then selected R10-04–R10-13; those corrections are locally regression-verified. The owner subsequently selected R10-03 and the five older deferred findings; all six are corrected. [Differed](differed.md) tracks the external acceptance steps.
 
@@ -112,7 +112,7 @@ Router/firewall/SSID/VLAN configuration is separate infrastructure work; retain 
 
 ## TV installation deliverable
 
-Delivery includes an installable signed TV APK, exact-model/OS validation, launcher/remote support and documented install/update steps. Follow [TV_INSTALLATION.md](TV_INSTALLATION.md) for the Bravia/Google TV and Fire OS procedures, Unraid base-address selection, browser approval, profile/PIN startup and acceptance. A local debug-signed version 0.2.0 APK is available; physical-device acceptance remains open. [DESIGN_REVIEW.md](DESIGN_REVIEW.md) records the supplied Figma handoff and current API differences.
+Delivery includes an installable signed TV APK, exact-model/OS validation, launcher/remote support and documented install/update steps. Follow [TV_INSTALLATION.md](TV_INSTALLATION.md) for the Bravia/Google TV and Fire OS procedures, Unraid base-address selection, browser approval, profile/PIN startup and acceptance. The current native project is version 0.3.0/code 3; current local APK checksum/signature evidence is recorded separately in VERIFICATION.md; physical-device acceptance remains open. [DESIGN_REVIEW.md](DESIGN_REVIEW.md) records the supplied Figma handoff and current API differences.
 
 ## Implementation checkpoint
 
@@ -163,3 +163,13 @@ Browser library requests are bounded to 24 entries and use server-side search/so
 ## HDD efficiency and setup follow-up
 
 The owner requires responsive playback/UI and low interference with other Unraid workloads on spinning disks. N113/N114 now implement batched/paged reads, measured indexes, unchanged-scan write avoidance, shared optional background admission, selective revisions, mounted-directory suggestions, provider-root mapping selectors, saved-connection reuse and metadata/subtitle presets. N118–N120 add compact persisted indexing, a bounded read-only worker and explicit directory checks. [The performance plan](PERFORMANCE_PLAN.md) and [large-library behavior](LARGE_LIBRARY.md) record evidence, resource limits and future choices. These changes need no extra database service, Docker socket or host installation. Windows/Linux-image and controlled Unraid HDD/shared-RAM acceptance remain open; local tests cannot establish interference with other household applications.
+
+## Approved UI/UX overhaul — 0.3.0 / schema 21
+
+The current browser combines channel cards and the library in My Network. A temporary exact-video tray supports fixed collections/channel selections; whole-show/season/folder groups remain explicit dynamic options. New channels use a four-step local draft with preview and atomic final creation. Profiles expose subscription checklists/lineup ordering, while private-channel visibility remains account-based. Source, account, profile and subscription dialogs use staged revision-guarded saves. A shared bounded folder tree supports indexed catalog selection and explicit permitted-directory setup browsing. Watch TV retains its playback/audio/caption controls and a visible paused picture/context.
+
+Schema 20 adds only the channel creation retry hash and session label/created/last-used fields; it does not import media. [My Network](MY_NETWORK.md) and [first channel](FIRST_CHANNEL.md) describe the current flow; [API](BACKEND.md) and [database](DATABASE.md) document contracts. Earlier dated sections above are historical checkpoints. Current integrated verification, final review, APK identity and target-host acceptance must be read from [verification](VERIFICATION.md), [the checklist](CHECKLIST.md) and [differed](differed.md), not inferred from implementation status.
+
+## Database-only reset and retained media safety — schema 21
+
+The owner selected selective database reset or fresh start retaining the explicitly authenticated administrator. Browser review includes categories/dependencies/counts and offline instructions. Actual execution requires a stopped server, exclusive ownership, administrator password, full revision, typed confirmation and a new verified append-only backup. There is no destructive HTTP endpoint, queued reset replay or physical media/output cleanup. Historical readonly roots and stricter output safety persist through reset/restore. [Operations](OPERATIONS.md#reset-application-data-offline) contains the runbook, while [reset safety](RESET_SAFETY_REVIEW.md) records the required two independent multi-agent rounds and fixes. Earlier schema-20 UI implementation sections describe their original checkpoint.

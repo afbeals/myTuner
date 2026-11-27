@@ -26,7 +26,9 @@ import { media, source } from "./helpers.js";
 test("managed cache evicts expired then least recently used outputs, preserves fresh partials and stays bounded under concurrent publication", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mytuner-cache-policy-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const cache = new ManagedCache(root, 30, 0, 86400000);
+  const policy = new Store(":memory:");
+  t.after(() => policy.close());
+  const cache = new ManagedCache(root, 30, 0, 86400000, policy);
   const a = "a".repeat(64) + ".vtt",
     b = "b".repeat(64) + ".vtt",
     c = "c".repeat(64) + ".json";
@@ -67,7 +69,9 @@ test("managed cache reclaims old interrupted outputs and rejects symlinks withou
     partial = name + "." + randomUUID() + ".partial";
   await writeFile(join(root, partial), "old");
   await utimes(join(root, partial), new Date(1000), new Date(1000));
-  const cache = new ManagedCache(root, 20, 0);
+  const policy = new Store(":memory:");
+  t.after(() => policy.close());
+  const cache = new ManagedCache(root, 20, 0, undefined, policy);
   await cache.publish(name, Buffer.from("{}"), () => {});
   assert.deepEqual(await readdir(root), [name]);
   await rm(join(root, name));

@@ -11,6 +11,7 @@ export interface Profile {
   ownerAccountId: string | null;
   pinProtected: boolean;
   locked: boolean;
+  canManage?: boolean;
 }
 export interface Source {
   id: string;
@@ -30,6 +31,7 @@ export interface Channel {
   shortNameOverride: string | null;
   description?: string;
   detailsRevision?: number;
+  hasProgramming?: boolean;
 }
 export interface Metadata {
   seriesTitle?: string;
@@ -48,12 +50,16 @@ export interface Media {
   available: boolean;
   metadata: Metadata;
 }
+export type MediaReference = Pick<Media, "id" | "title"> &
+  Partial<Pick<Media, "sourceId" | "relativePath">>;
 export interface Entry {
   id: string;
   channelId?: string;
   mediaId: string;
   programId: string;
   title?: string;
+  sourceId?: string;
+  relativePath?: string;
   startMs: number;
   endMs: number;
   offsetMs: number;
@@ -150,6 +156,7 @@ export interface Programming {
   seed: number;
 }
 export interface Library {
+  revision?: number;
   pagination?: { offset: number; limit: number; total: number };
   savedCollections?: Collection[];
   sources: Source[];
@@ -173,6 +180,8 @@ export interface Collection {
   id: string;
   name: string;
   count: number;
+  totalCount?: number;
+  unavailableCount?: number;
   ownerAccountId: string;
 }
 export const noBreaks: Rules = {

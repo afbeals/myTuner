@@ -271,8 +271,10 @@ test("output reservations count existing partials, account publications and rebu
 });
 
 test("managed cache hits coalesce access-time writes without losing expiration or authorization", async (t) => {
+  const policy = new Store(":memory:");
+  t.after(() => policy.close());
   const root = await temporary(t),
-    cache = new ManagedCache(root),
+    cache = new ManagedCache(root, undefined, undefined, undefined, policy),
     name = "a".repeat(64) + ".json";
   await cache.publish(name, Buffer.from("cached"), () => {});
   await cache.get(name, () => {});

@@ -454,7 +454,11 @@ export class PathSuggestions {
     private readonly readMounts: () => Promise<string> = () =>
       readFile("/proc/self/mountinfo", "utf8"),
   ) {}
-  async read(purpose: "source" | "metadata" | "subtitles", sourceId?: string) {
+  async read(
+    purpose: "source" | "metadata" | "subtitles",
+    sourceId?: string,
+    check: () => void = () => {},
+  ) {
     if (!this.pending)
       this.pending = (async () => {
         if (this.platform !== "linux")
@@ -475,6 +479,7 @@ export class PathSuggestions {
         }
       })();
     const snapshot = await this.pending;
+    check();
     const others = this.store.db
       .prepare("SELECT id,root_path,subtitle_root FROM sources")
       .all();

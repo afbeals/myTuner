@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import type { Programming, Source } from "../web/src/types";
@@ -32,7 +34,10 @@ async function fixture(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await selectInitialProfile(page);
+  await expect(
+    page.getByRole("navigation", { name: "Main navigation", exact: true }),
+  ).toBeAttached();
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -88,10 +93,12 @@ test("R7-01 history clears inspector and delete intent; I42 Undo and Recently de
 }) => {
   const f = await fixture(page),
     a = await mutate(page, `/api/profiles/${f.profileId}/collections`, "POST", {
+      creationId: randomUUID(),
       name: "R7 Collection A",
       mediaIds: [f.videos[0]!.id],
     }),
     b = await mutate(page, `/api/profiles/${f.profileId}/collections`, "POST", {
+      creationId: randomUUID(),
       name: "R7 Collection B",
       mediaIds: [f.videos[1]!.id],
     });
@@ -126,7 +133,7 @@ test("R7-01 history clears inspector and delete intent; I42 Undo and Recently de
     ).toBeVisible();
     await page
       .getByRole("button", {
-        name: `Details for ${f.videos[0]!.title}`,
+        name: `Details for ${f.videos[0]!.title} · TV shows · ${f.videos[0]!.relativePath}`,
         exact: true,
       })
       .click();
@@ -237,13 +244,13 @@ test("I43 stale previews/publications preserve the local draft and require delib
   await mutate(page, `/api/channels/${ch.id}/programming`, "PUT", f.config);
   const editor = await openEditor(page, f.profileId, ch.id);
   await editor
-    .getByRole("combobox", { name: "Rotation", exact: true })
+    .getByRole("combobox", { name: "Play order", exact: true })
     .selectOption("random");
   await mutate(page, `/api/channels/${ch.id}/programming`, "PUT", {
     ...f.config,
     seed: 99,
   });
-  await editor.getByRole("button", { name: "Preview", exact: true }).click();
+  await editor.getByRole("button", { name: "3. Preview", exact: true }).click();
   await editor
     .getByRole("button", { name: "Generate two-hour preview" })
     .click();
@@ -274,11 +281,11 @@ test("I43 stale previews/publications preserve the local draft and require delib
   await expect(
     editor.getByRole("button", { name: "Publish programming", exact: true }),
   ).toBeDisabled();
-  await editor.getByRole("button", { name: "Content", exact: true }).click();
+  await editor.getByRole("button", { name: "1. Content", exact: true }).click();
   await expect(
-    editor.getByRole("combobox", { name: "Rotation", exact: true }),
+    editor.getByRole("combobox", { name: "Play order", exact: true }),
   ).toHaveValue("random");
-  await editor.getByRole("button", { name: "Preview", exact: true }).click();
+  await editor.getByRole("button", { name: "3. Preview", exact: true }).click();
   await editor
     .getByRole("button", { name: "Generate two-hour preview" })
     .click();
@@ -362,20 +369,17 @@ test("R7-02 changing/removing a commercial pool clears old exclusions in the bro
   });
   const editor = await openEditor(page, f.profileId, ch.id);
   await editor
-    .getByRole("button", { name: "Commercials", exact: true })
+    .getByRole("button", { name: "2. Commercials", exact: true })
     .click();
   await editor
     .getByRole("combobox", { name: "Commercial pool", exact: true })
     .selectOption("");
-  await editor
-    .getByRole("button", { name: "Apply commercial rules", exact: true })
-    .click();
   let previewBody: Programming | null = null;
   page.on("request", (r) => {
     if (r.url().includes("/programming/preview"))
       previewBody = r.postDataJSON();
   });
-  await editor.getByRole("button", { name: "Preview", exact: true }).click();
+  await editor.getByRole("button", { name: "3. Preview", exact: true }).click();
   await editor
     .getByRole("button", { name: "Generate two-hour preview" })
     .click();
@@ -525,17 +529,21 @@ test("I40 explicit report cancel/retry leaves paused playback intact and reaches
   await expect(page.locator("video")).toHaveJSProperty("paused", true);
   await page.getByRole("button", { name: "Menu", exact: true }).click();
   await page
-    .getByRole("link", { name: "Problem reports", exact: true })
+    .getByRole("link", { name: "Problem Reports", exact: true })
     .click();
-  await expect(
-    page.getByRole("article").filter({
-      has: page.getByRole("heading", { name: "captions · New", exact: true }),
-    }),
-  ).toHaveCount(1);
   await page
-    .getByRole("button", { name: "Acknowledge report", exact: true })
+    .locator("dialog.confirmation-dialog")
+    .locator(".dialog-footer button")
+    .nth(1)
     .click();
-  await expect(
-    page.getByRole("heading", { name: "captions · Acknowledged", exact: true }),
-  ).toBeVisible();
+  const report = page
+    .getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: /^Captions · / }) });
+  await expect(report).toHaveCount(1);
+  await expect(report.getByText("New", { exact: true })).toBeVisible();
+  await report
+    .getByRole("button", { name: /^Acknowledge captions report from / })
+    .click();
+  await expect(report.getByText("Acknowledged", { exact: true })).toBeVisible();
+  await expect(report.getByText("New", { exact: true })).toHaveCount(0);
 });

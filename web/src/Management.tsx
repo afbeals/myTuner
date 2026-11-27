@@ -1,4 +1,11 @@
-import { BackgroundStatus } from "./BackgroundStatus";
+import { ProfilesPage } from "./Profiles";
+import { confirmAction } from "./confirmation";
+import {
+  BackgroundStatus,
+  WorkAdmissionNotice,
+  workAdmissionLabel,
+  type WorkAdmission,
+} from "./BackgroundStatus";
 import { SourcePathField } from "./SourcePathField";
 import { MetadataIntegration } from "./MetadataIntegration";
 import { SourceDirectory } from "./SourceDirectory";
@@ -6,7 +13,7 @@ import { SubtitleSettings } from "./Subtitles";
 import { EffectiveAccess, ImportReports, bytes } from "./Administration";
 import { MetadataLocation } from "./MetadataEditor";
 import { pairingPrefill } from "./pairing-link";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { Workspace } from "./App";
 import type { Account, Channel, GuideChannel, Profile, Source } from "./types";
 import { api } from "./api";
@@ -23,1108 +30,15 @@ import {
   value,
   number,
 } from "./ui";
-export function AccountsPage(props: Workspace) {
-  const rows = useRemote<Account[]>("/api/accounts", props.version),
-    [creating, setCreating] = useState(false),
-    [selected, setSelected] = useState<Account | null>(null);
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Accounts & roles</h1>
-          <p>
-            Administrators create accounts. Profiles control what each person
-            can watch.
-          </p>
-        </div>
-        <button onClick={() => setCreating(true)}>+ Create account</button>
-      </header>
-      <Load {...rows} retry={rows.reload} />
-      <section
-        className="panel table-scroll account-table"
-        aria-label="Accounts table"
-        tabIndex={0}
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.data?.map((a) => (
-              <tr key={a.id}>
-                <td>
-                  {a.username}
-                  {a.id === props.account.id && <small>Your account</small>}
-                </td>
-                <td>{a.role}</td>
-                <td>{a.disabled ? "Disabled" : "Active"}</td>
-                <td>
-                  <button
-                    className="secondary"
-                    aria-label={`Manage ${a.username}`}
-                    onClick={() => setSelected(a)}
-                  >
-                    Manage account
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      {rows.data?.length === 0 && (
-        <Empty title="No accounts to display">
-          Create an account to grant access to your network.
-        </Empty>
-      )}
-      {creating && (
-        <Modal title="Create account" onClose={() => setCreating(false)}>
-          <Form
-            submit="Create account"
-            onSave={async (d) => {
-              await api("/api/accounts", "POST", {
-                username: value(d, "username"),
-                password: String(d.get("password")),
-                role: value(d, "role"),
-              });
-              setCreating(false);
-              props.changed();
-            }}
-          >
-            <Field
-              label="Username"
-              name="username"
-              required
-              minLength={3}
-              maxLength={64}
-              autoComplete="off"
-            />
-            <Field
-              label="Password"
-              name="password"
-              type="password"
-              required
-              minLength={12}
-              maxLength={1024}
-              autoComplete="new-password"
-            />
-            <RoleSelect />
-          </Form>
-        </Modal>
-      )}
-      {selected && (
-        <Modal
-          title={`Manage ${selected.username}`}
-          onClose={() => setSelected(null)}
-        >
-          <div className="two-col">
-            <Form
-              submit="Save account"
-              onSave={async (d) => {
-                await api(`/api/accounts/${selected.id}`, "PATCH", {
-                  role: value(d, "role"),
-                  disabled: d.has("disabled"),
-                });
-                setSelected(null);
-                props.changed();
-              }}
-            >
-              <RoleSelect defaultValue={selected.role} />
-              <label className="check">
-                <input
-                  type="checkbox"
-                  name="disabled"
-                  defaultChecked={selected.disabled}
-                />
-                Disable account and revoke access
-              </label>
-            </Form>
-            <Form
-              submit="Reset password"
-              onSave={async (d) => {
-                await api(`/api/accounts/${selected.id}/password`, "PUT", {
-                  password: String(d.get("password")),
-                });
-                setSelected(null);
-                props.changed();
-              }}
-            >
-              <Field
-                label="New password"
-                name="password"
-                type="password"
-                required
-                minLength={12}
-                autoComplete="new-password"
-              />
-              <p>
-                Changing a password signs out all sessions for this account.
-              </p>
-            </Form>
-          </div>
-          <Action
-            secondary
-            danger
-            task={async () => {
-              if (
-                window.confirm(`Sign ${selected.username} out on every device?`)
-              )
-                await api(`/api/accounts/${selected.id}/sessions`, "DELETE");
-            }}
-          >
-            Revoke all sessions
-          </Action>
-        </Modal>
-      )}
-    </>
-  );
-}
-function RoleSelect({ defaultValue = "viewer" }: { defaultValue?: string }) {
-  return (
-    <Select label="Role" name="role" defaultValue={defaultValue}>
-      <option value="viewer">Viewer · watch only</option>
-      <option value="editor">Editor · manage assigned profiles</option>
-      <option value="admin">Administrator · manage entire network</option>
-    </Select>
-  );
-}
-interface Settings {
-  accounts: { accountId: string; username: string; canManage: boolean }[];
-  grants: { sourceId: string; subtree: string }[];
-}
-export function ProfilesPage(props: Workspace) {
-  const [creating, setCreating] = useState(false),
-    [selected, setSelected] = useState<Profile | null>(null),
-    [kind, setKind] = useState("person");
-  const accounts = useRemote<Account[]>(
-    props.account.role === "admin" ? "/api/accounts" : null,
-    props.version,
-  );
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Profiles</h1>
-          <p>Personal and shared room guides, with optional numeric TV PINs.</p>
-        </div>
-        {props.account.role === "admin" && (
-          <button onClick={() => setCreating(true)}>+ Create profile</button>
-        )}
-      </header>
-      <div className="library-grid">
-        {props.profiles.map((p) => (
-          <section className="panel" key={p.id}>
-            <span className="badge">
-              {p.kind === "room" ? "Room" : "Personal"}
-            </span>
-            <h2>{p.name}</h2>
-            <p>
-              {p.pinProtected ? "PIN protected" : "No PIN"}
-              {p.locked ? " · Locked" : ""}
-            </p>
-            <button className="secondary" onClick={() => setSelected(p)}>
-              Manage {p.name}
-            </button>
-          </section>
-        ))}
-      </div>
-      {!props.profiles.length && (
-        <Empty title="No profiles yet">
-          Create a person or room profile to organize a guide.
-        </Empty>
-      )}
-      {creating && (
-        <Modal title="Create profile" onClose={() => setCreating(false)}>
-          <Form
-            submit="Create profile"
-            onSave={async (d) => {
-              await api("/api/profiles", "POST", {
-                name: value(d, "name"),
-                kind,
-                ...(value(d, "owner")
-                  ? { ownerAccountId: value(d, "owner") }
-                  : {}),
-              });
-              setCreating(false);
-              props.changed();
-            }}
-          >
-            <Field label="Profile name" name="name" required maxLength={120} />
-            <Select
-              label="Profile type"
-              value={kind}
-              onChange={(e) => setKind(e.target.value)}
-            >
-              <option value="person">Person</option>
-              <option value="room">Shared room</option>
-            </Select>
-            <Select label="Owner" name="owner" required={kind === "person"}>
-              <option value="">No assigned owner (rooms only)</option>
-              {accounts.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.username}
-                </option>
-              ))}
-            </Select>
-          </Form>
-        </Modal>
-      )}
-      {selected && (
-        <Modal
-          title={`Manage ${selected.name}`}
-          onClose={() => setSelected(null)}
-        >
-          <ProfileSettings {...props} profile={selected} />
-        </Modal>
-      )}
-    </>
-  );
-}
-function ProfileSettings(props: Workspace & { profile: Profile }) {
-  const admin = props.account.role === "admin",
-    settings = useRemote<Settings>(
-      admin ? `/api/profiles/${props.profile.id}/settings` : null,
-      props.version,
-    ),
-    accounts = useRemote<Account[]>(admin ? "/api/accounts" : null),
-    sources = useRemote<Source[]>(admin ? "/api/sources" : null),
-    [grantSource, setGrantSource] = useState("");
-  const refresh = () => {
-    settings.reload();
-    props.changed();
-  };
-  return (
-    <div className="two-col">
-      <div className="stack">
-        {admin && <EffectiveAccess profileId={props.profile.id} />}
-        {admin && <Load {...accounts} retry={accounts.reload} />}
-        {admin && accounts.data && (
-          <Form
-            submit="Save profile"
-            onSave={async (d) => {
-              await api(`/api/profiles/${props.profile.id}`, "PATCH", {
-                name: value(d, "name"),
-                ownerAccountId: value(d, "owner") || null,
-              });
-              refresh();
-            }}
-          >
-            <Field
-              label="Profile name"
-              name="name"
-              required
-              defaultValue={props.profile.name}
-            />
-            <Select
-              label="Owner"
-              name="owner"
-              defaultValue={props.profile.ownerAccountId ?? ""}
-              required={props.profile.kind === "person"}
-            >
-              <option value="">No assigned owner</option>
-              {accounts.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.username}
-                </option>
-              ))}
-            </Select>
-          </Form>
-        )}
-        <Form
-          submit="Set TV PIN"
-          onSave={async (d) => {
-            await api(`/api/profiles/${props.profile.id}/pin`, "PUT", {
-              pin: value(d, "pin") || null,
-            });
-            refresh();
-          }}
-        >
-          <Field
-            label="Optional TV PIN"
-            name="pin"
-            type="password"
-            inputMode="numeric"
-            pattern="[0-9]{4,8}"
-            hint="4–8 digits. Leave empty to remove the PIN."
-            autoComplete="new-password"
-          />
-          <p>The TV PIN unlocks this profile after device pairing.</p>
-        </Form>
-        {admin && (
-          <Form
-            submit="Grant account access"
-            disabled={!accounts.data || !settings.data}
-            onSave={async (d) => {
-              await api(
-                `/api/profiles/${props.profile.id}/accounts/${value(d, "account")}`,
-                "PUT",
-                { canManage: d.has("manage") },
-              );
-              refresh();
-            }}
-          >
-            <Select label="Account" name="account" required>
-              {accounts.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.username}
-                </option>
-              ))}
-            </Select>
-            <label className="check">
-              <input type="checkbox" name="manage" />
-              May manage this profile
-            </label>
-            {settings.data?.accounts.map((a) => (
-              <div className="section-head" key={a.accountId}>
-                <span>
-                  {a.username} · {a.canManage ? "Manage" : "Watch only"}
-                </span>
-                <Action
-                  secondary
-                  task={async () => {
-                    await api(
-                      `/api/profiles/${props.profile.id}/accounts/${a.accountId}`,
-                      "DELETE",
-                    );
-                    refresh();
-                  }}
-                >
-                  Remove access
-                </Action>
-              </div>
-            ))}
-          </Form>
-        )}
-      </div>
-      {admin && (
-        <div className="stack grant-stack">
-          <Load {...settings} retry={settings.reload} />
-          <Load {...sources} retry={sources.reload} />
-          <Form
-            submit="Add library grant"
-            disabled={!sources.data || !settings.data}
-            onSave={async (d) => {
-              await api(`/api/profiles/${props.profile.id}/grants`, "POST", {
-                sourceId: value(d, "source"),
-                subtree: value(d, "subtree"),
-              });
-              refresh();
-            }}
-          >
-            <h3>Allowed library</h3>
-            <Select
-              label="Source"
-              name="source"
-              required
-              value={grantSource || sources.data?.[0]?.id || ""}
-              onChange={(e) => setGrantSource(e.target.value)}
-            >
-              {sources.data?.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </Select>
-            <SourceDirectory
-              sourceId={grantSource || sources.data?.[0]?.id}
-              label="Subfolder"
-              name="subtree"
-              version={props.version}
-            />
-            <p className="notice">
-              Permissions apply to artwork, search and playback too.
-            </p>
-          </Form>
-          {settings.data?.grants.map((g) => (
-            <section className="grant-row" key={g.sourceId + g.subtree}>
-              <div className="grant-copy">
-                <strong>
-                  {sources.data?.find((s) => s.id === g.sourceId)?.name ??
-                    "Source"}
-                </strong>
-                <span>{g.subtree || "Entire source"}</span>
-              </div>
-              <div className="grant-actions">
-                <Action
-                  label={`Remove grant for ${sources.data?.find((s) => s.id === g.sourceId)?.name ?? "Source"}, ${g.subtree || "entire source"}`}
-                  secondary
-                  danger
-                  task={async () => {
-                    if (
-                      !window.confirm(
-                        "Remove this library grant? Current playback may stop.",
-                      )
-                    )
-                      return;
-                    await api(
-                      `/api/profiles/${props.profile.id}/grants`,
-                      "DELETE",
-                      g,
-                    );
-                    refresh();
-                  }}
-                >
-                  Remove grant
-                </Action>
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-interface RefreshStatus {
-  sourceId: string;
-  provider: string | null;
-  url: string | null;
-  intervalMs: number | null;
-  lastSuccess: number | null;
-  lastError: string | null;
-  status?: string;
-}
-export function SourcesPage(props: Workspace) {
-  const [subtitleDirty, setSubtitleDirty] = useState(false);
-  const sources = useRemote<Source[]>("/api/sources", props.version),
-    statuses = useRemote<RefreshStatus[]>(
-      "/api/admin/refresh",
-      props.version,
-      true,
-    ),
-    [creating, setCreating] = useState(false),
-    [selected, setSelected] = useState<Source | null>(null),
-    [result, setResult] = useState<unknown>(null),
-    [editing, setEditing] = useState<Source | null>(null),
-    [notice, setNotice] = useState<string | null>(null),
-    [scans, setScans] = useState<
-      Record<
-        string,
-        { tone: "pending" | "success" | "warning" | "error"; text: string }
-      >
-    >({});
-  const integration = useRemote<{
-    provider: string;
-    url: string;
-    hasApiKey?: boolean;
-    mappings: { from: string; to: string }[];
-  } | null>(selected ? `/api/sources/${selected.id}/integration` : null);
-  // Keep the open integration draft mounted when sibling source settings refresh
-  // the workspace. Its own save/disconnect, reopening, or Retry reloads it.
-  // Automatic refresh stays mounted while that integration request is pending.
-  const refresh = () => {
-    sources.reload();
-    statuses.reload();
-    props.changed();
-  };
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Sources</h1>
-          <p>
-            Read existing shares in place. Add Sonarr or Radarr metadata when
-            available.
-          </p>
-        </div>
-        <button onClick={() => setCreating(true)}>+ Add source</button>
-      </header>
-      <BackgroundStatus />
-      {notice && (
-        <p className="notice" role="status">
-          {notice}
-        </p>
-      )}
-      <Load {...sources} retry={sources.reload} />
-      <div className="stack">
-        {sources.data?.map((s) => {
-          const status = statuses.data?.find((r) => r.sourceId === s.id);
-          return (
-            <section className="panel" key={s.id}>
-              <div className="section-head">
-                <h2>{s.name}</h2>
-                <span className="badge">{s.kind}</span>
-              </div>
-              <p>
-                {s.rootPath} ·{" "}
-                {s.recursive ? "Includes subfolders" : "Top-level only"}
-              </p>
-              {status?.provider && (
-                <p>
-                  {status.provider} · {status.url}
-                </p>
-              )}
-              {status?.lastError && <p className="error">{status.lastError}</p>}
-              <div className="actions">
-                <Action
-                  task={async () => {
-                    setScans((old) => ({
-                      ...old,
-                      [s.id]: {
-                        tone: "pending",
-                        text: `Scanning ${s.name} and refreshing metadata…`,
-                      },
-                    }));
-                    try {
-                      const scan = await api<{
-                        seen: number;
-                        updated: number;
-                        missing: number;
-                        complete: boolean;
-                        errors: unknown[];
-                        imported?: { matched: number; unmatched: number };
-                      }>(`/api/sources/${s.id}/scan`, "POST");
-                      setResult(scan);
-                      setScans((old) => ({
-                        ...old,
-                        [s.id]: {
-                          tone: scan.complete ? "success" : "warning",
-                          text: `${s.name}: ${scan.complete ? "Scan completed" : "Scan completed with issues"}. ${scan.seen} videos found; ${scan.errors.length} scan errors.${scan.imported ? ` Metadata matched: ${scan.imported.matched}; unmatched: ${scan.imported.unmatched}.` : ""}`,
-                        },
-                      }));
-                    } catch (error) {
-                      setScans((old) => ({
-                        ...old,
-                        [s.id]: {
-                          tone: "error",
-                          text: `${s.name}: Scan failed. ${error instanceof Error ? error.message : "Try again."}`,
-                        },
-                      }));
-                    } finally {
-                      refresh();
-                    }
-                  }}
-                >
-                  Scan & refresh metadata
-                </Action>
-                <button className="secondary" onClick={() => setSelected(s)}>
-                  Configure {s.name}
-                </button>
-                <button
-                  className="secondary"
-                  disabled={scans[s.id]?.tone === "pending"}
-                  onClick={() => setEditing(s)}
-                >
-                  Edit source {s.name}
-                </button>
-                <Action
-                  secondary
-                  danger
-                  label={`Remove source ${s.name}`}
-                  disabled={scans[s.id]?.tone === "pending"}
-                  task={async () => {
-                    if (
-                      !window.confirm(
-                        `Remove source “${s.name}”? Its catalog, integration and profile grants will be removed. Original videos and sidecars stay untouched. Sources referenced by channels or collections cannot be removed.`,
-                      )
-                    )
-                      return;
-                    await api(`/api/sources/${s.id}`, "DELETE");
-                    setNotice(
-                      `Source “${s.name}” removed. Original files were not changed.`,
-                    );
-                    setResult(null);
-                    refresh();
-                  }}
-                >
-                  Remove source
-                </Action>
-              </div>
-              {scans[s.id] && (
-                <p
-                  className={scans[s.id]!.tone === "error" ? "error" : "notice"}
-                  role={scans[s.id]!.tone === "error" ? "alert" : "status"}
-                >
-                  {scans[s.id]!.text}
-                </p>
-              )}
-            </section>
-          );
-        })}
-      </div>
-      {sources.data?.length === 0 && (
-        <Empty title="Add your first source">
-          Mount Unraid shares read-only in the server, then enter their
-          container paths.
-        </Empty>
-      )}
-      {result !== null && (
-        <section className="panel status-message">
-          <h2>Last scan result</h2>
-          <pre>{JSON.stringify(result, null, 2)}</pre>
-        </section>
-      )}
-      {creating && (
-        <Modal title="Add a source" onClose={() => setCreating(false)}>
-          <Form
-            submit="Add source"
-            onSave={async (d) => {
-              await api("/api/sources", "POST", {
-                name: value(d, "name"),
-                root: value(d, "root"),
-                kind: value(d, "kind"),
-                recursive: d.has("recursive"),
-              });
-              setCreating(false);
-              refresh();
-            }}
-          >
-            <Field label="Source name" name="name" required maxLength={120} />
-            <SourcePathField
-              label="Container media path"
-              name="root"
-              purpose="source"
-              placeholder="/media/shows"
-              required
-              hint="Use the path visible to this server. Choose a mount or enter a directory manually."
-            />
-            <Select label="Media type" name="kind">
-              <option value="shows">TV shows · Sonarr optional</option>
-              <option value="movies">Movies · Radarr optional</option>
-              <option value="videos">Custom videos</option>
-              <option value="commercials">Commercials</option>
-            </Select>
-            <label className="check">
-              <input type="checkbox" name="recursive" defaultChecked />
-              Include subfolders
-            </label>
-            <p className="notice">
-              Original videos stay in place. Scanning does not start bulk
-              generation.
-            </p>
-          </Form>
-        </Modal>
-      )}
-      {editing && (
-        <Modal
-          title={`Edit source ${editing.name}`}
-          onClose={() => setEditing(null)}
-        >
-          <Form
-            submit="Save source"
-            onSave={async (data) => {
-              const root = value(data, "root"),
-                kind = value(data, "kind");
-              if (
-                (root !== editing.rootPath || kind !== editing.kind) &&
-                !window.confirm(
-                  "Changing the directory or media type resets this source’s catalog, integration and profile grants. Original files stay untouched. Continue?",
-                )
-              )
-                throw new Error(
-                  "Source change canceled. Your edits are still here.",
-                );
-              const updated = await api<Source & { catalogReset: boolean }>(
-                `/api/sources/${editing.id}`,
-                "PATCH",
-                {
-                  name: value(data, "name"),
-                  root,
-                  kind,
-                  recursive: data.has("recursive"),
-                },
-              );
-              setNotice(
-                updated.catalogReset
-                  ? "Source updated. Configure its integration and profile grants, then scan the new location."
-                  : "Source updated. Scan again to apply a changed subfolder scope.",
-              );
-              setEditing(null);
-              setResult(null);
-              refresh();
-            }}
-          >
-            <Field
-              label="Source name"
-              name="name"
-              defaultValue={editing.name}
-              required
-              maxLength={120}
-            />
-            <SourcePathField
-              label="Container media path"
-              name="root"
-              purpose="source"
-              sourceId={editing.id}
-              defaultValue={editing.rootPath ?? ""}
-              required
-              hint="Existing directory visible to this server. Your saved path is retained."
-            />
-            <Select label="Media type" name="kind" defaultValue={editing.kind}>
-              <option value="shows">TV shows · Sonarr optional</option>
-              <option value="movies">Movies · Radarr optional</option>
-              <option value="videos">Custom videos</option>
-              <option value="commercials">Commercials</option>
-            </Select>
-            <label className="check">
-              <input
-                type="checkbox"
-                name="recursive"
-                defaultChecked={Boolean(editing.recursive)}
-              />
-              Include subfolders
-            </label>
-            <p className="notice">
-              Name and scan scope can be edited. Directory and type changes
-              reset the catalog and require the source to be unused by channels,
-              collections and retained playback references. Original files are
-              never moved, edited or deleted.
-            </p>
-          </Form>
-        </Modal>
-      )}
-      {selected && (
-        <Modal
-          title={`Configure ${selected.name}`}
-          onClose={() => {
-            if (
-              !subtitleDirty ||
-              window.confirm(
-                "Discard subtitle settings? A save received by the server may still finish.",
-              )
-            )
-              setSelected(null);
-          }}
-        >
-          <ImportReports
-            key={`imports:${selected.id}`}
-            sourceId={selected.id}
-          />
-          <SubtitleSettings
-            key={`subtitles:${selected.id}`}
-            sourceId={selected.id}
-            onSaved={refresh}
-            onDirtyChange={setSubtitleDirty}
-          />
-          <MetadataLocation
-            key={selected.id}
-            sourceId={selected.id}
-            initialRoot={selected.metadataRoot ?? null}
-            onSaved={refresh}
-          />
-          <Load {...integration} retry={integration.reload} />
-          <div className="two-col">
-            {!integration.loading &&
-              !integration.error &&
-              ["shows", "movies"].includes(selected.kind) && (
-                <MetadataIntegration
-                  key={selected.id}
-                  source={selected}
-                  initial={integration.data}
-                  onSaved={() => {
-                    setNotice("Metadata integration updated.");
-                    integration.reload();
-                    refresh();
-                  }}
-                />
-              )}
-            <Form
-              submit="Save automatic refresh"
-              onSave={async (d) => {
-                await api(`/api/sources/${selected.id}/refresh`, "PUT", {
-                  intervalMs: number(d, "minutes")
-                    ? number(d, "minutes") * 60000
-                    : null,
-                });
-                refresh();
-              }}
-            >
-              <Field
-                label="Refresh interval (minutes)"
-                name="minutes"
-                type="number"
-                min={0}
-                defaultValue={
-                  (statuses.data?.find((s) => s.sourceId === selected.id)
-                    ?.intervalMs ?? 0) / 60000
-                }
-                hint="Use 0 for manual refresh."
-              />
-              <p>Scans and optional metadata refresh run on the server.</p>
-            </Form>
-          </div>
-        </Modal>
-      )}
-    </>
-  );
-}
+export { AccountsPage } from "./Accounts";
+export { ProfilesPage };
+export { SourcesPage } from "./Sources";
 export function SubscriptionsPage(props: Workspace) {
-  const [lineupBusy, setLineupBusy] = useState(false);
-  const channels = useRemote<Channel[]>(
-      `/api/profiles/${props.profileId}/channels`,
-      props.version,
-    ),
-    guide = useRemote<{ channels: GuideChannel[] }>(
-      `/api/profiles/${props.profileId}/guide`,
-      props.version,
-    );
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Profile guide & subscriptions</h1>
-          <p>
-            Choose what appears for{" "}
-            {props.profiles.find((p) => p.id === props.profileId)?.name}. Other
-            users’ private channels stay hidden.
-          </p>
-        </div>
-        <a href="#watch" className="button secondary">
-          Open profile guide
-        </a>
-      </header>
-      <section className="panel">
-        <h2>Guide order</h2>
-        <p>
-          Move channels in this profile’s lineup. Browser/TV guides and
-          previous/next tuning use this order.
-        </p>
-        {guide.data?.channels.map((c, index) => (
-          <div className="section-head" key={c.id}>
-            <strong>
-              {index + 1}. {c.name}
-            </strong>
-            <div className="actions">
-              {[-1, 1].map((delta) => (
-                <Action
-                  key={delta}
-                  secondary
-                  disabled={
-                    lineupBusy ||
-                    index + delta < 0 ||
-                    index + delta >= guide.data!.channels.length
-                  }
-                  task={async () => {
-                    setLineupBusy(true);
-                    try {
-                      const ids = guide.data!.channels.map((c) => c.id);
-                      [ids[index], ids[index + delta]] = [
-                        ids[index + delta]!,
-                        ids[index]!,
-                      ];
-                      await api(
-                        `/api/profiles/${props.profileId}/lineup`,
-                        "PUT",
-                        { channelIds: ids },
-                      );
-                      props.changed();
-                      guide.reload();
-                    } finally {
-                      setLineupBusy(false);
-                    }
-                  }}
-                >
-                  {delta < 0 ? `Move ${c.name} up` : `Move ${c.name} down`}
-                </Action>
-              ))}
-            </div>
-          </div>
-        ))}
-      </section>
-      <Load {...channels} retry={channels.reload} />
-      <Load {...guide} retry={guide.reload} />
-      <div className="stack">
-        {channels.data?.map((c) => {
-          const subscribed = guide.data?.channels.some((g) => g.id === c.id);
-          return (
-            <section className="panel section-head" key={c.id}>
-              <div>
-                <h2>{c.name}</h2>
-                <p>
-                  {c.visibility} ·{" "}
-                  {subscribed ? "In this profile’s guide" : "Available to add"}
-                </p>
-              </div>
-              <Action
-                secondary={Boolean(subscribed)}
-                disabled={!guide.data}
-                task={async () => {
-                  if (
-                    subscribed &&
-                    !window.confirm(
-                      `Remove ${c.name} from this profile’s guide? Current playback will stop.`,
-                    )
-                  )
-                    return;
-                  await api(
-                    `/api/profiles/${props.profileId}/subscriptions/${c.id}`,
-                    subscribed ? "DELETE" : "PUT",
-                  );
-                  props.changed();
-                }}
-              >
-                {subscribed ? "Unsubscribe" : "Subscribe"}
-              </Action>
-            </section>
-          );
-        })}
-      </div>
-      {channels.data?.length === 0 && (
-        <Empty title="No channels available">
-          Publish a channel using media this profile may access.
-        </Empty>
-      )}
-    </>
-  );
+  return <ProfilesPage {...props} initialSubscriptions={props.profileId} />;
 }
-export function PairingPage() {
-  const [done, setDone] = useState(false),
-    [review, setReview] = useState<{
-      code: string;
-      deviceName: string;
-      expiresMs: number;
-    } | null>(null);
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Approve a TV connection</h1>
-          <p>Open myTuner on your TV and enter the code it displays.</p>
-        </div>
-      </header>
-      <div className="two-col">
-        <Form
-          submit={review ? "Approve TV" : "Review TV"}
-          onSave={async (d) => {
-            const code = value(d, "code").replace(/[\s-]/g, "").toUpperCase();
-            if (!review || review.code !== code) {
-              const result = await api<{
-                deviceName: string;
-                expiresMs: number;
-              }>("/api/auth/pairings/review", "POST", { userCode: code });
-              setReview({ ...result, code });
-              return;
-            }
-            await api("/api/auth/pairings/approve", "POST", { userCode: code });
-            setDone(true);
-            setReview(null);
-          }}
-        >
-          <Field
-            label="TV connection code"
-            name="code"
-            defaultValue={pairingPrefill()}
-            required
-            minLength={10}
-            maxLength={14}
-            autoComplete="off"
-            placeholder="ABCDE 12345"
-            onChange={() => {
-              setDone(false);
-              setReview(null);
-            }}
-          />
-          <p>
-            Only approve a TV you recognize. Its access follows your account and
-            profile permissions.
-          </p>
-          {review && (
-            <section className="notice" aria-label="Review TV approval">
-              <h2>{review.deviceName}</h2>
-              <p>Server: {location.origin}</p>
-              <p>
-                Code: <strong>{review.code.match(/.{1,5}/g)?.join(" ")}</strong>{" "}
-                · Expires {new Date(review.expiresMs).toLocaleTimeString()}
-              </p>
-              <p>
-                Check that this exact code and device appear on your television.
-                Approval uses your account’s viewing permissions; choose a
-                profile on the TV afterward.
-              </p>
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setReview(null)}
-              >
-                Cancel approval
-              </button>
-            </section>
-          )}
-          {done && (
-            <p role="status" className="notice">
-              TV approved. Choose a profile on your TV to continue.
-            </p>
-          )}
-        </Form>
-        <section className="panel">
-          <h2>Connect to this server</h2>
-          <p>On your TV, enter:</p>
-          <strong>{location.origin}</strong>
-          <p className="muted">
-            Use your Unraid LAN address and published port. Localhost works only
-            on the server itself.
-          </p>
-          <a href="#setup">Installation and connection help →</a>
-        </section>
-      </div>
-    </>
-  );
-}
-interface Session {
-  id: string;
-  kind: string;
-  expiresAt: number;
-  current: boolean;
-}
-export function SessionsPage() {
-  const rows = useRemote<Session[]>("/api/auth/sessions");
-  return (
-    <>
-      <header className="page-head">
-        <div>
-          <h1>Devices & sessions</h1>
-          <p>Revoke access for browsers or paired TVs you no longer use.</p>
-        </div>
-      </header>
-      <Load {...rows} retry={rows.reload} />
-      {rows.data?.length === 0 && (
-        <Empty title="No active sessions">
-          Devices appear here after signing in or pairing.
-        </Empty>
-      )}
-      <div className="stack">
-        {rows.data?.map((s) => (
-          <section className="panel section-head" key={s.id}>
-            <div>
-              <h2>
-                {s.kind === "device"
-                  ? "Paired TV"
-                  : s.kind === "browser"
-                    ? "Browser"
-                    : "API session"}
-                {s.current ? " · This session" : ""}
-              </h2>
-              <p>Expires {new Date(s.expiresAt).toLocaleString()}</p>
-            </div>
-            <Action
-              secondary
-              danger
-              task={async () => {
-                if (
-                  !window.confirm(
-                    "Revoke this session? It will need to sign in or pair again.",
-                  )
-                )
-                  return;
-                await api(`/api/auth/sessions/${s.id}`, "DELETE");
-                if (s.current)
-                  window.dispatchEvent(new Event("mytuner:expired"));
-                else rows.reload();
-              }}
-            >
-              Revoke access
-            </Action>
-          </section>
-        ))}
-      </div>
-    </>
-  );
-}
-interface Job {
+export { PairingPage } from "./Pairing";
+export { SessionsPage } from "./Sessions";
+interface Job extends WorkAdmission {
   id: string;
   status: string;
   directory: string;
@@ -1133,6 +47,8 @@ interface Job {
   completed: number;
   failed: number;
   error: string | null;
+  hasMore?: boolean;
+  current?: { relativePath: string } | null;
   items?: {
     id: string;
     mediaId: string;
@@ -1174,28 +90,35 @@ interface CleanupReview {
 }
 export function GenerationPage(props: Workspace) {
   const sources = useRemote<Source[]>("/api/sources"),
-    jobs = useRemote<Job[]>("/api/admin/generation", props.version, true),
+    jobs = useRemote<Job[]>("/api/admin/generation", props.version, true, {
+      intervalMs: 3000,
+      active: (rows) =>
+        rows.some((row) => ["queued", "running"].includes(row.status)),
+    }),
     [selected, setSelected] = useState<string | null>(null),
-    [tick, setTick] = useState(0),
     [scope, setScope] = useState<Scope | null>(null),
     [preview, setPreview] = useState<GenerationPreview | null>(null),
     [cleanup, setCleanup] = useState<CleanupReview | null>(null),
     [cleanupBusy, setCleanupBusy] = useState(false),
+    [starting, setStarting] = useState(false),
     [generationSource, setGenerationSource] = useState("");
+  const [logOffset, setLogOffset] = useState(0);
   const job = useRemote<Job>(
-    selected ? `/api/generation/jobs/${selected}` : null,
-    tick,
+    selected
+      ? `/api/generation/jobs/${selected}?offset=${logOffset}&limit=100`
+      : null,
+    props.version,
     true,
+    {
+      intervalMs: 3000,
+      active: (row) => ["queued", "running"].includes(row.status),
+    },
   );
+  useEffect(() => setLogOffset(0), [selected]);
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTick((v) => v + 1);
-    }, 3000);
-    return () => clearInterval(timer);
-  }, []);
-  useEffect(() => {
-    jobs.reload();
-  }, [tick]);
+    if (job.data && !["queued", "running"].includes(job.data.status))
+      jobs.reload();
+  }, [job.data?.status]);
   return (
     <>
       <header className="page-head">
@@ -1250,6 +173,7 @@ export function GenerationPage(props: Workspace) {
             ))}
           </Select>
           <SourceDirectory
+            profileId={props.profileId}
             sourceId={generationSource || sources.data?.[0]?.id}
             label="Folder within source"
             name="directory"
@@ -1276,7 +200,7 @@ export function GenerationPage(props: Workspace) {
           ))}
           <label className="check">
             <input type="checkbox" name="regenerate" />
-            Regenerate existing outputs
+            Replace existing outputs
           </label>
           <p>
             Valid outputs are reused by default. Conversions use a fixed CPU
@@ -1284,29 +208,59 @@ export function GenerationPage(props: Workspace) {
           </p>
         </Form>
         <section className="panel">
-          <h2>Generation queue</h2>
+          <h2>Generation work</h2>
           <Load {...jobs} retry={jobs.reload} />
-          {jobs.data?.length === 0 && (
-            <p>No jobs yet. Preview a folder to get started.</p>
-          )}
-          <div className="stack">
-            {jobs.data?.map((j) => (
-              <div className="job-item" key={j.id}>
-                <strong>
-                  {sources.data?.find((s) => s.id === j.sourceId)?.name ??
-                    "Source"}{" "}
-                  / {j.directory || "Entire source"}
-                </strong>
-                <p>
-                  {j.status} · {j.completed ?? 0}/{j.total} completed ·{" "}
-                  {j.failed ?? 0} failed
-                </p>
-                <button className="secondary" onClick={() => setSelected(j.id)}>
-                  View job
-                </button>
+          {[true, false].map((active) => (
+            <section className="settings-section" key={String(active)}>
+              <h3>{active ? "Active queue" : "Recent history"}</h3>
+              {jobs.data &&
+                !jobs.data.some(
+                  (job) =>
+                    ["queued", "running"].includes(job.status) === active,
+                ) && (
+                  <p>
+                    {active
+                      ? "No work is waiting or running."
+                      : "No completed jobs yet."}
+                  </p>
+                )}
+              <div className="stack">
+                {jobs.data
+                  ?.filter(
+                    (job) =>
+                      ["queued", "running"].includes(job.status) === active,
+                  )
+                  .map((job) => (
+                    <div className="compact-row" key={job.id}>
+                      <div>
+                        <strong>
+                          {sources.data?.find(
+                            (source) => source.id === job.sourceId,
+                          )?.name ?? "Source"}{" "}
+                          / {job.directory || "Entire source"}
+                        </strong>
+                        <p>
+                          {workAdmissionLabel(job) ??
+                            (job.status === "completed"
+                              ? "Finished"
+                              : job.status[0]!.toUpperCase() +
+                                job.status.slice(1))}{" "}
+                          · {job.completed ?? 0}/{job.total} completed ·{" "}
+                          {job.failed ?? 0} failed
+                        </p>
+                      </div>
+                      <button
+                        className="secondary"
+                        aria-label={`View ${job.status} generation job`}
+                        onClick={() => setSelected(job.id)}
+                      >
+                        View job
+                      </button>
+                    </div>
+                  ))}
               </div>
-            ))}
-          </div>
+            </section>
+          ))}
         </section>
       </div>
       <section className="panel status-message" aria-label="Output storage">
@@ -1345,9 +299,9 @@ export function GenerationPage(props: Workspace) {
               disabled={cleanupBusy}
               task={async () => {
                 if (
-                  !window.confirm(
+                  !(await confirmAction(
                     "Apply this output reconciliation review? Stale/orphan files and missing references will be removed. You can regenerate missing outputs afterward.",
-                  )
+                  ))
                 )
                   return;
                 setCleanupBusy(true);
@@ -1403,8 +357,51 @@ export function GenerationPage(props: Workspace) {
       {preview && scope && (
         <Modal
           title="Confirm generation scope"
+          closeDisabled={starting}
+          footer={
+            <div className="actions">
+              {" "}
+              <Action
+                disabled={!preview.count || starting}
+                task={async () => {
+                  setStarting(true);
+                  try {
+                    const j = await api<Job>(
+                      "/api/generation/jobs",
+                      "POST",
+                      scope,
+                    );
+                    setPreview(null);
+                    setSelected(j.id);
+                    props.changed();
+                  } finally {
+                    setStarting(false);
+                  }
+                }}
+              >
+                Start generation
+              </Action>
+              <button
+                className="secondary"
+                disabled={starting}
+                onClick={() => setPreview(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          }
           onClose={() => setPreview(null)}
         >
+          <h3>
+            {sources.data?.find((source) => source.id === scope.sourceId)?.name}{" "}
+            / {scope.directory || "Entire source"}
+          </h3>
+          <p>
+            {scope.regenerate
+              ? "Replace existing outputs"
+              : "Reuse valid existing outputs"}{" "}
+            · {scope.kinds.join(", ")}
+          </p>
           <p>
             {preview.count} files · {scope.kinds.length} output types ·{" "}
             {scope.recursive ? "Including subfolders" : "This folder only"}
@@ -1422,85 +419,130 @@ export function GenerationPage(props: Workspace) {
             ))}
           </ul>
           {preview.count > 20 && <p>And {preview.count - 20} more files.</p>}
-          <Action
-            disabled={!preview.count}
-            task={async () => {
-              const j = await api<Job>("/api/generation/jobs", "POST", scope);
-              setPreview(null);
-              setSelected(j.id);
-              props.changed();
-            }}
-          >
-            Start generation
-          </Action>
         </Modal>
       )}
       {selected && (
-        <Modal title="Generation progress" onClose={() => setSelected(null)}>
+        <Modal
+          title="Generation progress"
+          onClose={() => setSelected(null)}
+          footer={
+            <div className="actions">
+              {job.data && (
+                <>
+                  {" "}
+                  <div className="actions">
+                    {["queued", "running"].includes(job.data.status) && (
+                      <Action
+                        secondary
+                        danger
+                        task={async () => {
+                          if (
+                            !(await confirmAction(
+                              "Cancel unfinished generation? Completed outputs remain available. Original media is unchanged.",
+                            ))
+                          )
+                            return;
+                          await api(
+                            `/api/generation/jobs/${selected}/cancel`,
+                            "POST",
+                          );
+                          job.reload();
+                          jobs.reload();
+                        }}
+                      >
+                        Cancel job
+                      </Action>
+                    )}
+                    {["failed", "cancelled"].includes(job.data.status) && (
+                      <Action
+                        task={async () => {
+                          await api(
+                            `/api/admin/generation/${selected}/retry`,
+                            "POST",
+                          );
+                          job.reload();
+                          jobs.reload();
+                        }}
+                      >
+                        Retry unfinished outputs
+                      </Action>
+                    )}
+                  </div>
+                </>
+              )}
+              <button className="secondary" onClick={() => setSelected(null)}>
+                Done
+              </button>
+            </div>
+          }
+        >
           <Load {...job} retry={job.reload} />
           {job.data && (
             <>
               <p role="status">
-                {job.data.status} · {job.data.completed}/{job.data.total}{" "}
-                outputs completed · {job.data.failed} failed
+                {workAdmissionLabel(job.data) ?? job.data.status} ·{" "}
+                {job.data.completed}/{job.data.total} outputs completed ·{" "}
+                {job.data.failed} failed
               </p>
+              <WorkAdmissionNotice work={job.data} />
               <progress
                 aria-label="Generation progress"
                 max={Math.max(1, job.data.total)}
                 value={job.data.completed + job.data.failed}
               />
               <ErrorBox error={job.data.error} />
-              <div className="stack">
-                {job.data.items?.map((i) => (
-                  <div className="job-item" key={i.id}>
-                    <strong>
-                      {i.kind} · {i.status}
-                    </strong>
-                    <small>{i.title ?? "Video"}</small>
-                    <small>{i.relativePath ?? ""}</small>
-                    {i.waitingReason === "playback-capacity" && (
-                      <p role="status">Waiting for playback capacity</p>
-                    )}
-                    {i.error && <p className="error">{i.error}</p>}
-                  </div>
-                ))}
-              </div>
-              <div className="actions">
-                {["queued", "running"].includes(job.data.status) && (
-                  <Action
-                    secondary
-                    danger
-                    task={async () => {
-                      if (
-                        !window.confirm(
-                          "Cancel unfinished generation? Completed outputs remain available. Original media is unchanged.",
-                        )
-                      )
-                        return;
-                      await api(
-                        `/api/generation/jobs/${selected}/cancel`,
-                        "POST",
-                      );
-                      job.reload();
-                    }}
+              <h3>
+                {sources.data?.find(
+                  (source) => source.id === job.data?.sourceId,
+                )?.name ?? "Source"}{" "}
+                /{" "}
+                {job.data.current
+                  ? job.data.current.relativePath
+                      .split("/")
+                      .slice(0, -1)
+                      .join("/") || "Source root"
+                  : job.data.directory || "Entire source"}
+              </h3>
+              <p role="status">
+                {workAdmissionLabel(job.data) ??
+                  (job.data.current && job.data.admission === "active"
+                    ? `Processing: ${job.data.current.relativePath.split("/").at(-1)}`
+                    : ["queued", "running"].includes(job.data.status)
+                      ? "Waiting for the next file"
+                      : "Work finished")}
+              </p>
+              <details open={!["queued", "running"].includes(job.data.status)}>
+                <summary>File results · {job.data.total} outputs</summary>
+                <ul className="result-log">
+                  {job.data.items?.map((item) => (
+                    <li key={item.id}>
+                      <strong>{item.status}</strong> ·{" "}
+                      {item.relativePath ?? item.title} · {item.kind}
+                      {item.error && (
+                        <span className="error"> — {item.error}</span>
+                      )}
+                      {item.waitingReason === "playback-capacity" &&
+                        " · Waiting for playback capacity"}
+                    </li>
+                  ))}
+                </ul>
+                <div className="actions">
+                  <button
+                    className="secondary"
+                    disabled={!logOffset || job.loading}
+                    onClick={() => setLogOffset((n) => Math.max(0, n - 100))}
                   >
-                    Cancel job
-                  </Action>
-                )}
-                {["failed", "cancelled"].includes(job.data.status) && (
-                  <Action
-                    task={async () => {
-                      await api(
-                        `/api/admin/generation/${selected}/retry`,
-                        "POST",
-                      );
-                      job.reload();
-                    }}
+                    Previous results
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={!job.data.hasMore || job.loading}
+                    onClick={() => setLogOffset((n) => n + 100)}
                   >
-                    Retry unfinished outputs
-                  </Action>
-                )}
-              </div>
+                    Next results
+                  </button>
+                </div>
+              </details>
             </>
           )}
         </Modal>
@@ -1508,115 +550,19 @@ export function GenerationPage(props: Workspace) {
     </>
   );
 }
-export function HelpPage() {
+const BundledHelp = lazy(() =>
+  import("./Help").then((module) => ({ default: module.HelpPage })),
+);
+export function HelpPage(props: { returnTo?: string }) {
   return (
-    <main className="help panel">
-      <a href="#channels">← Back to myTuner</a>
-      <h1>Your television network</h1>
-      <h2>Start the Unraid server</h2>
-      <ol>
-        <li>
-          Use the repository’s Docker Compose configuration. Mount your existing
-          shares under <code>/media</code> with read-only access and keep data,
-          generated files and cache on writable appdata volumes.
-        </li>
-        <li>
-          Create the first administrator with{" "}
-          <code>
-            docker compose run --rm -e MYTUNER_ADMIN_PASSWORD mytuner node
-            dist/bootstrap.js admin
-          </code>
-          . Set MYTUNER_ADMIN_PASSWORD in your shell first; no default password
-          exists.
-        </li>
-        <li>
-          Open <code>http://UNRAID-LAN-IP:8777</code> in your browser. Sign in,
-          add sources, scan, create profiles and grant access.
-        </li>
-        <li>
-          Publish channel programming and subscribe each profile to its
-          channels.
-        </li>
-      </ol>
-      <h2>Back up and recover the application</h2>
-      <p>
-        Backups are triggered by an operator. This application does not schedule
-        recurring backups. A completed bundle contains the database, manifest
-        and matching integration encryption key; media and derivatives stay
-        outside it.
-      </p>
-      <ol>
-        <li>
-          While the server is running, use{" "}
-          <code>docker compose exec mytuner node dist/backup-cli.js</code>.
-          Record the completed snapshot directory printed by the command.
-        </li>
-        <li>
-          Check that complete bundle with{" "}
-          <code>
-            docker compose exec mytuner node dist/verify-cli.js
-            /app/data/backups/SNAPSHOT --json
-          </code>
-          . Verification checks database integrity, migrations and encryption
-          keys; it does not test media mounts.
-        </li>
-        <li>
-          Before restoring, stop the application. Use the same compatible image
-          with{" "}
-          <code>
-            docker compose run --rm mytuner node dist/restore-cli.js
-            /app/data/backups/SNAPSHOT
-          </code>
-          , then start it again. Restore revokes all sessions; sign in and pair
-          TVs again.
-        </li>
-      </ol>
-      <p>
-        Retain complete bundles and the previous tested image separately.
-        Copying a live SQLite file is insufficient. Nonempty WAL-bearing inputs
-        are rejected. Detailed recovery, interrupted-restore and rollback steps
-        are in <code>docs/OPERATIONS.md</code>.
-      </p>
-      <h2>Install on your TV or Fire TV</h2>
-      <ol>
-        <li>
-          Use an Android/Google TV television or Android-based Fire OS stick.
-          Amazon Vega devices require a different client.
-        </li>
-        <li>
-          Enable developer options and ADB debugging on your device. Use its
-          displayed pairing/address instructions; recent Google TV models use
-          separate pairing and connect ports.
-        </li>
-        <li>
-          Build the APK from the <code>android/</code> directory using the
-          documented Gradle command. Return to the repository root, then install
-          from your computer with{" "}
-          <code>
-            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-          </code>
-          .
-        </li>
-        <li>
-          Open myTuner from the TV launcher. Enter the server’s LAN URL, such as{" "}
-          <code>http://192.168.1.20:8777</code>.
-        </li>
-        <li>
-          In this browser, open Connect TV and approve the exact code on the
-          television. Select your profile on the TV, enter its PIN if required,
-          then choose a channel.
-        </li>
-      </ol>
-      <p>
-        If the server is unreachable, check the Unraid published port and your
-        network’s TV-to-server routing. Separate IoT networks may need a router
-        firewall rule.
-      </p>
-      <p>
-        The detailed model-specific steps, build requirements and
-        troubleshooting are in <code>docs/TV_INSTALLATION.md</code> in the
-        checkout.
-      </p>
-    </main>
+    <Suspense
+      fallback={
+        <main className="help panel">
+          <p role="status">Loading help…</p>
+        </main>
+      }
+    >
+      <BundledHelp {...props} />
+    </Suspense>
   );
 }

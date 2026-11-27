@@ -1,0 +1,99 @@
+# Scenario 08 — TV remote navigation
+
+Reviewed 2026-11-26 on the current 0.3.0 working tree. **Native runtime walkthrough: PARTIAL / UNVERIFIED on hardware.** No physical TV or emulator was attached. This review respected the owner’s emulator deferral and made no product, test, baseline, dependency, version, Git, device or original-media changes.
+
+## Scope and evidence boundary
+
+Read the repository’s personal-project `AGENTS.md`, [the plan](../MYTUNER_PLAN.md), [clients](../CLIENTS.md), [TV installation](../TV_INSTALLATION.md), [verification](../VERIFICATION.md) and [deferred acceptance](../differed.md). Reviewed the complete native activity, networking/address validation, PIN/transport/profile/track/caption helpers, existing JVM tests, manifest/resources and the relevant existing remote-test scripts. No other new scenario report informed these findings.
+
+- Read-only `adb devices -l` returned an empty device list. It started a host ADB daemon; that owned daemon was stopped afterward. No device connection, shell/input command, APK installation or emulator launch occurred.
+- Existing APK: `tv.mytuner.app`, **0.3.0 / code 3**, minimum API 23, target API 35, Android/Leanback launcher entries and optional touchscreen. SHA-256: `df95255b2bb99a32722a91539be8c2651b5b16da10279d482606cfb7b1697289`. These are package facts, not successful installation or hardware playback evidence.
+- Ran `JAVA_HOME=/Library/Java/JavaVirtualMachines/amazon-corretto-17.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ./gradlew --offline --console=plain :app:testDebugUnitTest`. It succeeded in five seconds with **all 22 tasks UP-TO-DATE**. Existing XML results contain 24 tests, zero failures/errors, across 12 suites. This command reused cached results; it was not a fresh execution of 24 tests and does not test Android focus/layout. The existing SDK XML-version warning did not fail the task. No downloads were attempted or toolchain components installed.
+- Inspected existing native baselines `01-connect.png`, `04-pin.png`, `05-guide.png` and `06-playing.png` using `view_image`. They show historical intended appearance only; they are not new current-APK screenshots or physical-device proof.
+- Exercised the **browser approval counterpart** against an owned standard `e2e/server.ts --demo` fixture on `127.0.0.1:19311`, using installed Playwright/Chromium and existing `web-dist`, with no rebuild. A pairing-start API call explicitly simulated an unattached TV as test preconditioning. Sign-in, initial profile choice, invalid-code entry, review, cancellation and approval all used visible UI. The approving account was synthetic `designer`; no real account or media was used.
+
+Browser evidence lives under `/private/tmp/mytuner-scenario-08/`: `observations.json`, `browser-review-desktop.png`, `browser-review-phone.png`, `browser-approved-phone.png`, `server.log` and `approval-review.mjs`. Screenshots were inspected with `view_image`. The first exploratory helper stopped because the legitimate initial profile chooser covered the page; the corrected walkthrough chose Living Room through that dialog and completed. No application failure is inferred from the helper error. Focus observations were taken after the application’s animation-frame focus handoff settled.
+
+## Journey coverage
+
+| Step                        | Checked behavior                                                                                                                                                                                                                    | Result and limit                                                                                                   |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Server address and keyboard | Explicit address focus; OK/Enter opens OS keyboard; Down hides it and focuses Connect; origin validator rejects paths/passwords/query/fragments; bounded HTTP timeouts and compatibility check                                      | Source checked. Actual Sony/Fire keyboard and Back behavior unverified. See S08-01.                                |
+| Pairing code                | Actual ten-character code grouped 5+5; expiry countdown; transient poll retry; Get a new code, Change server and help; public-code QR requires authenticated approval                                                               | Source checked. Native code rendering/scanning/poll-to-profile transition not run.                                 |
+| Browser approval            | Prefill survived sign-in/profile choice; invalid code gave recovery; lowercase/spaces accepted; device name, server, code and expiry shown; review focus moved to TV name                                                           | Runtime passed at desktop 1440×1000 and phone 390×844. See S08-03.                                                 |
+| Explicit consent            | Poll stayed `pending` before approval and after UI Cancel approval; only UI Approve TV yielded `approved` plus a token; confirmation heading received focus                                                                         | Runtime passed in the synthetic counterpart. No native secure-storage assertion. No page errors.                   |
+| Profile and PIN             | Startup clears device viewing state; permitted profiles; serialized choice; loading/failure/empty states; 4–8 digits; D-pad keypad and number/numpad/Delete/Enter keys; duplicate unlock guard                                      | Source/JVM-helper coverage. No current remote traversal or audible announcement claim.                             |
+| Guide                       | Subscription guide; current/next actions join live; selected channel and refresh tags; Earlier/Now/Later; empty/error states                                                                                                        | Source checked. See S08-02. Long lineup, thirty-second refresh and future-window physical focus remain unverified. |
+| Channel and playback        | Fresh session per tune; direct-to-HLS fallback; authenticated delivery; current context; previous/next and in-player browsing                                                                                                       | Source checked. Actual first frame, codec support, transition, channel zap and remote performance unverified.      |
+| Pause, resume, Go Live      | Device-local server commands; pause stops/clears delivery with retained-frame intent; lost-command acknowledgement reconciles through descriptor; controls reject duplicate activation without disabling Pause focus                | Source/JVM-helper coverage only. A retained frame and actual no-fetch behavior require runtime acceptance.         |
+| Audio and subtitles         | Default/off choices; language preferences; fresh-delivery identity guards; caption failure retry; caption appearance; stale caption results rejected                                                                                | Source/JVM-helper coverage. Actual decoded alternate audio, caption timing and paused menus unverified.            |
+| Back and focus              | Player Back hides controls, then leaves to guide; directions/OK reveal hidden controls and focus Pause; guide/PIN Back opens profiles; dialog dismissal restores captured focus; Home/onStop releases playback                      | Source checked; physical Back/OS-keyboard/dialog and Home/relaunch sequence unverified.                            |
+| Lost server or access       | Pairing poll transient retries; playback error reveals controls and pauses player; poll recovery reconciles state; Retry joins/reloads; access-denied message and profile/channel escape routes; 401 clears credential and re-pairs | Source checked. No injected native outage/revocation in this round. See S08-04.                                    |
+
+## Confirmed findings and concrete corrections
+
+### S08-01 — A previous Connect request can override a newer address submission (P2)
+
+**Evidence: source-confirmed request-order defect; not runtime-reproduced on TV.** In [MainActivity.kt](../../android/app/src/main/java/tv/mytuner/app/MainActivity.kt#L415), each Connect activation starts a health task using its captured address. The button remains active and no per-attempt serial/latest-address guard exists. The shared screen epoch changes only after a response navigates onward.
+
+Concrete sequence: submit reachable server A while its health response is slow; change the field to server B and submit; A responds first while B is pending. A’s still-current callback saves A, clears the previous token and opens A’s pairing screen. That screen change then discards B’s callback. The last submitted address loses. The same race can replace the current loading/error message with an earlier failure. There is no claim that this bypasses pairing or server authorization.
+
+Carry a latest-connect-attempt identity through success **and failure**, or serialize submissions while retaining focus and showing “Connecting to [address]…”. Only the intended attempt may save an origin, clear a token or navigate. Preserve the entered address on failure. A meaningful later regression should delay A, submit B, release A first, and require B to remain the selected target without stale errors.
+
+### S08-02 — Guide time-navigation drops the action’s focus identity when rebuilding (P2)
+
+**Evidence: source-confirmed missing focus transfer; exact destination on a physical TV remains unverified.** [Earlier/Now/Later handlers](../../android/app/src/main/java/tv/mytuner/app/MainActivity.kt#L752) call `guide()` and replace the entire view hierarchy through `shell()`. They do not capture/pass the activated tag first. The later `currentFocus?.tag` read occurs in the asynchronous response callback against the replacement hierarchy, not the action the viewer activated. The ordinary thirty-second refresh can retain a tag inside its existing hierarchy; that does not fix the explicit time-navigation rebuild.
+
+For repeated Later/OK browsing, the old Later focus is therefore not deliberately retained. Android’s initial focus or the selected-channel fallback controls the next position. Do not describe a particular unexpected destination as reproduced in this review.
+
+Pass the intended navigation tag into the new guide, or update the current guide in place, and restore it after both success and error. Show the displayed date/time window beside Earlier/Now/Later, and make the present/five-hour bounds clear. Later acceptance should require three consecutive Later/OK presses to advance three windows with Later still focused, then verify Now, Earlier, empty/error responses, enlarged text and ordinary refresh separately.
+
+### S08-03 — Phone approval does not identify the approving account beside the decision (P2)
+
+**Evidence: browser-runtime confirmed, with supporting source.** At 390px the screenshot `browser-review-phone.png` shows the device/server/code/expiry and Approve TV, plus a prominent global **Current profile: Living Room** selector and Admin badge. The actual username `designer` lives in the collapsed Menu and is absent from the approval review. [PairingPage’s review](../../web/src/Pairing.tsx#L250) contains no approving-account identity. The [global profile selector](../../web/src/App.tsx#L464) remains visible.
+
+Pairing grants the account’s viewing permissions; selecting Living Room does not scope approval to that one profile. The UI makes the nearby profile easier to confirm than the account that matters. This is an account/profile clarity issue, not a demonstrated authorization bypass. Desktop does show the username in the sidebar, but separated from the decision.
+
+Put “Approve as designer” and “This TV can use profiles allowed for this account” directly in the review, with a deliberate change-account route. Consider suppressing or explaining the unrelated profile selector on Connect TV. Retain the current exact-code/device/server check and explicit consent. Verify on a phone with two differently permitted accounts that the account identity and scope are visible before approval.
+
+### S08-04 — Expired/revoked authorization silently becomes an ordinary new pairing (P3)
+
+**Evidence: source-confirmed recovery-copy/diagnostics gap; no live revocation reproduction.** [The 401 handler](../../android/app/src/main/java/tv/mytuner/app/MainActivity.kt#L189) clears the saved credential and immediately calls `pairing()`, returning before it records `authorization-expired` or displays a reason. `pairing()` uses the same first-time heading and creates a new code. A viewer interrupted during playback gets no explanation of why the TV suddenly requires a phone. Connection details can retain an old error category or `none` despite the authorization loss.
+
+Pass a reason into pairing and record the category before navigating: “This TV’s approval expired or was removed. Approve this new code to reconnect.” Keep Change server/help available and distinguish authorization loss from a network outage. Verify revoked/expired-token transitions from profiles, guide, playback and captions, including one request failing while a dialog is open. Existing token-clearing/re-pairing remains the correct authorization boundary.
+
+## Human-friendly remote wording and focus recommendations
+
+The source’s “OK always joins the channel live,” device-local pause language, deliberate in-player Watch live and two-stage Back hierarchy are helpful. Keep them. Improvements that fit the existing flow:
+
+- PIN: “Enter this profile’s 4–8 digit PIN,” plus a visible “Unlocking…” state and short forgotten-PIN help. Keep dots, Delete and explicit Unlock; do not automatically submit at four digits because longer PINs are valid.
+- Playback: explain “Back hides controls · press a direction or OK to show them.” The source implements this, but the playback overlay has no equivalent visible hint. Do not imply Back exits immediately.
+- Connection recovery: preserve the saved server and the reason for interruption; avoid asking the viewer to diagnose “authorization” or “API” without an action. Keep detailed categories in help.
+- Preserve focus on the invoked action through pending work and cancellation. Existing Pause behavior is a useful model for Connect and guide navigation.
+
+These copy suggestions are recommendations, not separately reproduced failures.
+
+## Unverified hypotheses — do not count as confirmed bugs
+
+- Media play/pause handles every `ACTION_DOWN` without the PIN branch’s `repeatCount == 0` guard. A remote that repeats held toggle keys could issue another toggle after the previous request settles. Actual repeat generation and visible impact depend on the remote/OS; exercise a held media key before classifying this as a reproduced defect.
+- The bottom playback controls use a non-scrollable container with potentially long context/title text. Long names, overscan and enlarged font could crowd or clip controls. Existing historical normal-size images cannot settle this; inspect actual bounding boxes and visible focus at 1.0/1.3 font scale on the targets.
+- Remote focus around an unavailable first channel, dialogs with late-loading content, guide refresh during scrolling, and abrupt permission revocation needs physical/runtime inspection. Source alone does not prove a focus trap.
+
+## Concrete physical-remote acceptance checklist
+
+Run only as an explicitly authorized follow-up on the intended Bravia, then a supported Android-based Fire TV. Record model, OS/API, remote, resolution/overscan, APK hash/signing identity, server version/origin and network. Installation/update/debugging changes are outside this review.
+
+1. **Entry/keyboard:** cold launch; focus is visible on address; OK opens the real keyboard; Back closes keyboard without unexpectedly exiting; type a wrong origin, correct it, Down reaches Connect, OK connects; verify incompatible/offline errors and help. Repeat A→B slow-response case from S08-01.
+2. **Pair/phone:** confirm ten characters and expiry remain readable from seating distance; scan QR or enter grouped code; identify approving account/device/server/code; cancel once, then explicitly approve; observe TV reach profiles; try expired code and Get a new code.
+3. **Profiles/PIN:** traverse every profile using only D-pad; wrong/short/4–8 digit PINs; Delete; numeric and keypad input where supported; repeated OK while unlock is slow; Back and Choose another profile; no PIN appears in clear text. Empty/denied profiles have a reachable recovery action.
+4. **Guide:** verify each current/next cell, channel names, detail text and artwork; next-program OK still joins live; scroll a long lineup; cross thirty-second refresh while focused/scrolled; test Later three times, Now and Earlier; inspect selected time window and focus; test empty/unavailable programming.
+5. **Playback and Back:** obtain a real advancing frame/audio; Back hides controls, next Back returns to guide; directions/OK reveal without accidental tuning/pause; dialog Back closes only the top dialog and restores the invoked action; Home/reopen requires profile/PIN and releases this device’s old session.
+6. **Local pause:** pause on a recognizable frame and confirm it remains visible; no continued delivery after buffers clear; another device continues; resume stays behind live; Go Live rejoins live; channel changes join live; browse/cancel retains pause; Watch live confirmation discards pause deliberately.
+7. **Tracks/captions:** choose a known alternate spoken language and actually hear it; choose an authenticated text caption and inspect source-time alignment; Off; appearance Apply/Cancel; pause with captions; episode/commercial/direct↔HLS boundaries; missing preferred language; delayed/failing caption retry while healthy video continues.
+8. **Outage/recovery:** temporarily interrupt only the synthetic server route; errors/actions remain legible and focused; recover without losing an intentional pause; Retry a failed join; test a lost acknowledgement after applied Pause/Resume/Go Live using a controlled fixture. Do not use real router changes as test preconditioning.
+9. **Access loss:** revoke the specifically identified synthetic device/account/profile access in browser UI; verify playback stops/metadata is denied; observe reasoned re-pair or profile escape; restore permissions through normal UI and retry. Revoke no household device accidentally.
+10. **Display/accessibility/endurance:** long profile/channel/program names, larger font, readable code/PIN/focus and captions, both remotes’ media-key hold/repeat, real audible TalkBack if enabled by the owner, commercial transitions, mixed household formats and an extended viewing session. Historical screenshots, helper tests and a successful short clip do not satisfy these gates.
+
+## Cleanup and review disposition
+
+No fixes were implemented in this review. The browser and helper exited. The owned port-19311 fixture received SIGTERM and removed its temporary media/database root `mytuner-ui-qoJLdd`; removal and absence of the listener were verified. The Gradle and ADB daemons started by this review were stopped by their identified PIDs. Other running fixtures were left alone. Review screenshots/script/observations remain only under the stated private temporary evidence directory. Current-APK full native recovery/tracks/TalkBack repeats and physical hardware acceptance remain open in [differed](../differed.md).

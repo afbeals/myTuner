@@ -4,7 +4,7 @@
 
 myTuner builds a personal TV network over files that already exist on Unraid. It owns the library catalog, permissions, channel programming, continuous timelines and playback APIs. A channel advances by wall-clock time even when nobody watches. Actual video conversion runs only on demand.
 
-Version 0.2.0 implements one TypeScript server, its SQLite database, command-line operational tools, a React browser manager/player and a Kotlin/Media3 TV client. Docker includes the server and built browser; the native APK is installed separately. The owner approved the Figma designs before product UI implementation. See [applications](APPLICATIONS.md) for client scope and [verification](VERIFICATION.md) for acceptance limits.
+Version 0.3.0 (schema 21) implements one TypeScript server, its SQLite database, command-line operational tools, a React browser manager/player and a Kotlin/Media3 TV client. Docker includes the server and built browser; the native APK is installed separately. The owner approved the Figma designs before product UI implementation. See [applications](APPLICATIONS.md) for client scope and [verification](VERIFICATION.md) for acceptance limits.
 
 ## System diagram
 
@@ -117,7 +117,7 @@ Failures preserve prior useful state where possible: an offline share does not m
 
 Measure actual CPU, disk, network, encoding latency and concurrent viewers before changing concurrency or choosing hardware acceleration. Detailed budgets and recovery steps are in [operations](OPERATIONS.md). Accepted choices and unresolved decisions are in [decisions](DECISIONS.md).
 
-## Client implementation in 0.2.0
+## Client foundation introduced in 0.2.0
 
 The React/Vite manager and player live under `web/`, with locally bundled fonts and deferred Hls.js. The Fastify process serves the matching production `web-dist` build. Kotlin/Media3 under `android/` supplies the native TV/Fire OS player and protected device credentials. Both clients use the same authenticated APIs and existing read-only media; SQLite and all integration credentials remain on the server. Detailed module, lifecycle, playback and test responsibilities are in [CLIENTS.md](CLIENTS.md).
 
@@ -152,3 +152,19 @@ The performance update adds `background-work.ts` (serialized optional I/O/checkp
 ## Large-library request isolation
 
 Production paged library/media/programming-option reads use `catalog-service.ts` and one `catalog-worker.ts` with a read-only SQLite connection. `catalog-projection.ts` maintains compact persisted rows through the sole main writer in yielded bounded transactions; schema 19 retains backfill/dirty/publication state. `catalog-request.ts` connects disconnection cancellation and final fresh authorization/version validation to HTTP replies. Direct synchronous functions remain compatibility/reference APIs; the production HTTP library endpoint defaults omitted limits to 24 and always uses the reader. See [large-library design](LARGE_LIBRARY.md) for the bounded queues, memory limits and target-host evidence boundary.
+
+## Atomic configuration and current browser composition — 0.3.0
+
+`source-configuration.ts`, `profile-configuration.ts` and `subscription-configuration.ts` provide revision-guarded read/save contracts for staged modal drafts. Source validation resolves changed directories before a short final transaction, then rechecks actor/settings/active scan. Profile PIN hashing occurs outside the transaction and authority/revision checks repeat before committing identity/access/grants/PIN changes. Account configuration follows the same pattern in `identity.ts`. No-op account saves do not revoke sessions. Legacy individual endpoints remain for compatibility; the current manager uses the composed saves.
+
+`channel-lifecycle.ts` previews a new channel without inserting it, then creates details and initial programming atomically. The draft ID and internal creation hash provide retry identity; a catalog/draft revision guards preview freshness. Existing-channel programming retains its current-program boundary rules. Permanent channel/profile deletion first checks retained references and does not purge schedules/history or media implicitly.
+
+`catalog-selection.ts` serves bounded stored-catalog trees and selection pages through the existing read-only catalog worker. `collection-membership.ts` reads at most 5,001 compact IDs to enforce the 5,000-video edit bound; visible names are paged separately. `setup-directories.ts` is an explicit admin filesystem browser, serialized and confined to mounted/configured roots with writable storage excluded. It lists direct child directories, never probes videos, and closes bounded cached handles on expiry/shutdown. It is separate from catalog reads and source scans.
+
+The React Network/ChannelWizard/CatalogBrowser/DirectoryTree components implement the hub, local draft, temporary selection tray and bounded mounted caches. Schema 20 persists session labels/created/last-used timestamps and a private channel-creation retry hash; no UI draft or media bytes are stored there. Every playback/save still uses current server authorization. See [database](DATABASE.md), [API](BACKEND.md), [My Network](MY_NETWORK.md) and [performance limits](PERFORMANCE_PLAN.md).
+
+## Offline reset and retained file authority
+
+Reset planning is an admin-only HTTP read/preview; destructive execution is a separate stopped-server CLI. The CLI takes exclusive database-directory ownership, authenticates the explicitly retained administrator, reviews a full revision, requires a verified append-only backup and applies one allowlisted foreign-key-checked transaction. It does not start scans, maintenance, delivery or generation, and it has no filesystem deletion operation. Removing source/catalog records never becomes a physical media operation.
+
+`reset-data.ts` owns categories/dependencies/schema recognition and the SQL transaction; `reset-backup.ts` owns strict path/control-file validation and append-only verified bundles; `reset-offline.ts` owns authentication/execution; `reset-cli.ts` owns private prompts; `reset-routes.ts` owns browser review only. `storage-safety.ts` keeps historical readonly roots and persistent cleanup/write barriers across reset and restore. Normal output services enforce these barriers at their direct helpers as well as HTTP entry points. Current-operation temporary cleanup requires verified inode ownership; prior/unknown files remain untouched. See [reset safety](RESET_SAFETY_REVIEW.md) and [Operations](OPERATIONS.md#reset-application-data-offline).

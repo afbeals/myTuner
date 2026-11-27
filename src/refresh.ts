@@ -127,7 +127,7 @@ export class RefreshService {
     );
     const existing = this.store.db
       .prepare(
-        "SELECT provider,url,encrypted_key FROM integrations WHERE source_id=?",
+        "SELECT provider,url,encrypted_key,mappings_json FROM integrations WHERE source_id=?",
       )
       .get(sourceId);
     const reusable =
@@ -155,6 +155,14 @@ export class RefreshService {
     const encryptedKey = input.apiKey
       ? seal(this.key, input.apiKey)
       : String(reusable?.encrypted_key ?? existing!.encrypted_key);
+    if (
+      existing &&
+      existing.provider === input.provider &&
+      String(existing.url) === url.toString() &&
+      String(existing.encrypted_key) === encryptedKey &&
+      String(existing.mappings_json) === JSON.stringify(input.mappings)
+    )
+      return;
     this.store.db
       .prepare(
         "INSERT INTO integrations(id,source_id,provider,url,encrypted_key,mappings_json) VALUES(?,?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET provider=excluded.provider,url=excluded.url,encrypted_key=excluded.encrypted_key,mappings_json=excluded.mappings_json,last_success=NULL",
@@ -173,6 +181,14 @@ export class RefreshService {
   }
   isScanning(sourceId: string) {
     return this.running.has(sourceId);
+  }
+  admission(sourceId: string) {
+    if (!this.isScanning(sourceId))
+      return { admission: null, waitingReason: null };
+    const state = this.background?.status(`scan:${sourceId}`);
+    return state?.admission
+      ? state
+      : { admission: "active", waitingReason: null };
   }
   private recordAttempt(
     sourceId: string,
@@ -207,6 +223,10 @@ export class RefreshService {
       400,
       "Refresh interval must be 1 minute to 7 days",
     );
+    const saved = this.store.db
+      .prepare("SELECT interval_ms FROM refresh_sources WHERE source_id=?")
+      .get(sourceId);
+    if (saved?.interval_ms === intervalMs) return;
     this.store.db
       .prepare(
         "INSERT INTO refresh_sources(source_id,interval_ms,next_run_ms) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET interval_ms=excluded.interval_ms,next_run_ms=excluded.next_run_ms",
@@ -391,11 +411,11 @@ export class RefreshService {
   }
   scan(
     sourceId: string,
-    options: { automatic?: boolean } = {},
+    options: { automatic?: boolean; metadata?: boolean } = {},
   ): Promise<unknown> {
     invariant(!this.controller.signal.aborted, 503, "Server is stopping");
     const config = this.configuration(sourceId),
-      signature = JSON.stringify(config) ?? "none";
+      signature = JSON.stringify([config, options.metadata ?? true]);
     const existing = this.running.get(sourceId);
     if (existing) {
       if (existing.signature === signature) return existing.promise;
@@ -408,6 +428,7 @@ export class RefreshService {
       sourceId,
       config,
       options.automatic ?? false,
+      options.metadata ?? true,
     ).finally(() => this.running.delete(sourceId));
     this.running.set(sourceId, { signature, promise: job });
     return job;
@@ -416,6 +437,7 @@ export class RefreshService {
     sourceId: string,
     config: ReturnType<RefreshService["configuration"]>,
     automatic: boolean,
+    includeMetadata = true,
   ) {
     const current = () =>
       JSON.stringify(this.configuration(sourceId)) === JSON.stringify(config);
@@ -436,6 +458,7 @@ export class RefreshService {
                   this.controller.signal,
                   checkpoint,
                 ),
+              `scan:${sourceId}`,
             )
           : await scanSource(
               this.store,
@@ -444,7 +467,7 @@ export class RefreshService {
               this.controller.signal,
             );
       let imported: unknown;
-      if (config) {
+      if (config && includeMetadata) {
         invariant(this.key, 503, "Integration key storage is unavailable");
         const previousImport = Number(
           this.store.db

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Load, useRemote } from "./ui";
+import { duration, Load, useRemote } from "./ui";
 export function ChannelStatistics({
   profileId,
   channelId,
@@ -91,7 +91,7 @@ export type BreakDiagnostic = {
 };
 const reasons: Record<string, string> = {
   filled: "Break filled",
-  "minimum-remaining": "Short remainder returned to the show",
+  "minimum-remaining": "Short remainder returned to programming",
   "clip-limit": "Clip limit reached",
   "no-commercials": "No eligible commercials",
   "duration-fit": "No complete clip fits",
@@ -107,23 +107,28 @@ export function BreakDiagnostics({ items }: { items: BreakDiagnostic[] }) {
         <>
           <p>
             {items.reduce((n, d) => n + d.clips, 0)} clips ·{" "}
-            {(
-              items.reduce((n, d) => n + d.endMs - d.startMs, 0) / 1000
-            ).toFixed(1)}{" "}
-            actual seconds · {items.reduce((n, d) => n + d.shortenedClips, 0)}{" "}
+            {duration(items.reduce((n, d) => n + d.endMs - d.startMs, 0))}{" "}
+            scheduled · {items.reduce((n, d) => n + d.shortenedClips, 0)}{" "}
             shortened clips. Repeat allowance, per-break cap and cooldown are
             enforced independently.
           </p>
-          {items.slice(0, 50).map((d, i) => (
-            <p key={i}>
-              {new Date(d.startMs).toLocaleString()} · Pool: {d.poolSize} clips
-              · Played: {d.clips} ·{" "}
-              {(Math.max(0, d.endMs - d.startMs) / 1000).toFixed(1)} of{" "}
-              {d.requestedDurationMs / 1000} requested seconds ·{" "}
-              {reasons[d.reason] ?? "Review this break"}
-            </p>
-          ))}
-          {items.length > 50 && <p>Showing the first 50 break explanations.</p>}
+          <details>
+            <summary>Break explanations · {items.length} breaks</summary>
+            <div className="bounded-checklist">
+              {items.slice(0, 50).map((d, i) => (
+                <p key={i}>
+                  {new Date(d.startMs).toLocaleString()} · Pool: {d.poolSize}{" "}
+                  clips · Played: {d.clips} ·{" "}
+                  {duration(Math.max(0, d.endMs - d.startMs))} of{" "}
+                  {duration(d.requestedDurationMs)} requested ·{" "}
+                  {reasons[d.reason] ?? "Review this break"}
+                </p>
+              ))}
+              {items.length > 50 && (
+                <p>Showing the first 50 break explanations.</p>
+              )}
+            </div>
+          </details>
         </>
       )}
     </section>

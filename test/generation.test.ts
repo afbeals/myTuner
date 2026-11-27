@@ -8,6 +8,7 @@ import {
   readFile,
   rm,
   readdir,
+  symlink,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ import { addSource, scanSource } from "../src/catalog.js";
 import {
   GenerationRunner,
   previewGeneration,
+  generationPreflight,
   runFFmpeg,
 } from "../src/generation.js";
 const execute = promisify(execFile);
@@ -453,3 +455,58 @@ test(
     }
   },
 );
+
+test("job summary and paged results agree with terminal task outcomes", async (t) => {
+  const f = await fixture(t);
+  const runner = new GenerationRunner(
+    f.store,
+    join(f.root, "generated"),
+    async (args) => {
+      await writeFile(args.at(-1)!, "complete");
+    },
+  );
+  t.after(() => runner.stop());
+  const job = await runner.enqueue({ ...f.input, recursive: true });
+  await runner.drain();
+  const summary = runner.summary(job.id)!;
+  assert.equal(summary.status, "completed");
+  assert.equal(summary.total, 2);
+  assert.equal(summary.completed, 2);
+  assert.equal(summary.failed, 0);
+  const first = runner.taskPage(job.id, 0, 1),
+    second = runner.taskPage(job.id, 1, 1);
+  assert.equal(first.items.length, 1);
+  assert.equal(first.hasMore, true);
+  assert.equal(second.items.length, 1);
+  assert.equal(second.hasMore, false);
+  assert.notEqual(first.items[0]!.id, second.items[0]!.id);
+  assert.equal(first.current, null);
+});
+test("reuse preflight accepts a canonical alias while preserving source files", async (t) => {
+  const f = await fixture(t),
+    generated = join(f.root, "generated");
+  const original = await readFile(f.file);
+  const runner = new GenerationRunner(f.store, generated, async (args) => {
+    await writeFile(args.at(-1)!, "complete");
+  });
+  t.after(() => runner.stop());
+  await runner.enqueue(f.input);
+  await runner.drain();
+  const alias = join(f.root, "output-alias");
+  await symlink(generated, alias, "dir");
+  assert.equal(
+    (await generationPreflight(f.store, f.input, alias)).reusableOutputs,
+    1,
+  );
+  assert.equal(
+    (
+      await generationPreflight(
+        f.store,
+        { ...f.input, regenerate: true },
+        alias,
+      )
+    ).reusableOutputs,
+    0,
+  );
+  assert.deepEqual(await readFile(f.file), original);
+});

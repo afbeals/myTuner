@@ -1,3 +1,11 @@
+import { registerResetRoutes } from "./reset-routes.js";
+import { registerSourceInspections } from "./source-inspections.js";
+import {
+  sourceDetails,
+  registerSourceConfiguration,
+} from "./source-configuration.js";
+import { registerSubscriptionConfiguration } from "./subscription-configuration.js";
+import { registerProfileConfiguration } from "./profile-configuration.js";
 import { CatalogService } from "./catalog-service.js";
 import { readCatalogRequest } from "./catalog-request.js";
 import { Maintenance } from "./maintenance.js";
@@ -222,6 +230,15 @@ export function createServer(
     options.secureCookie,
     options.publicOrigin,
   );
+  registerResetRoutes(app, store, actor);
+  registerSourceInspections(app, store, actor);
+  registerSourceConfiguration(app, store, actor, refresh, [
+    ...roots,
+    generatedRoot,
+    cacheRoot,
+  ]);
+  registerProfileConfiguration(app, store, actor);
+  registerSubscriptionConfiguration(app, store, actor);
   registerSetupRoutes(app, store, actor, refresh, [
     ...roots,
     generatedRoot,
@@ -349,7 +366,7 @@ export function createServer(
     const account = actor(request);
     return store.db
       .prepare(
-        `SELECT p.id,p.name,p.kind,p.owner_account_id, (p.pin_hash IS NOT NULL) AS pinProtected FROM profiles p WHERE ?='admin' OR p.owner_account_id=?
+        `SELECT p.id,p.name,p.kind,p.owner_account_id, (p.pin_hash IS NOT NULL) AS pinProtected, (SELECT username FROM accounts WHERE id=p.owner_account_id) AS ownerName, (SELECT COUNT(*) FROM profile_accounts a WHERE a.profile_id=p.id) AS accountCount, (SELECT COUNT(*) FROM source_grants g WHERE g.profile_id=p.id) AS grantCount FROM profiles p WHERE ?='admin' OR p.owner_account_id=?
    OR EXISTS(SELECT 1 FROM profile_accounts a WHERE a.profile_id=p.id AND a.account_id=?) ORDER BY p.name`,
       )
       .all(account.role, account.id, account.id)
@@ -362,7 +379,21 @@ export function createServer(
             locked = true;
           else throw error;
         }
-        return { ...p, pinProtected: Boolean(p.pinProtected), locked };
+        let canManage = false;
+        try {
+          requireProfile(store, account, String(p.id), true);
+          canManage = true;
+        } catch {}
+        const { ownerName, accountCount, grantCount, ...visible } = p;
+        return {
+          ...visible,
+          ...(account.role === "admin"
+            ? { ownerName, accountCount, grantCount }
+            : {}),
+          pinProtected: Boolean(p.pinProtected),
+          locked,
+          canManage,
+        };
       });
   });
   app.post("/api/profiles", async (request, reply) => {
@@ -515,11 +546,18 @@ export function createServer(
       .parse(request.query);
     return sourceDirectories(store, account, sourceId, input);
   });
+  app.get("/api/sources/:sourceId", async (request) => {
+    requireAdmin(actor(request));
+    const { sourceId } = z.object({ sourceId: id }).parse(request.params);
+    return sourceDetails(store, sourceId);
+  });
   app.patch("/api/sources/:sourceId", async (request) => {
     requireAdmin(actor(request));
     const { sourceId } = z.object({ sourceId: id }).parse(request.params);
     const body = z
       .object({
+        revision: z.string().length(64),
+        resetConfirmed: z.boolean().optional(),
         name: name.optional(),
         root: z.string().min(1).optional(),
         kind: z.enum(["shows", "movies", "videos", "commercials"]).optional(),
@@ -545,7 +583,27 @@ export function createServer(
   app.post("/api/sources/:sourceId/scan", async (request) => {
     requireAdmin(actor(request));
     const { sourceId } = z.object({ sourceId: id }).parse(request.params);
-    return refresh.scan(sourceId);
+    const input = z
+      .object({ metadata: z.boolean().default(true) })
+      .strict()
+      .default({ metadata: true })
+      .parse(request.body);
+    return refresh.scan(sourceId, input);
+  });
+  app.get("/api/sources/:sourceId/scan-status", async (request) => {
+    requireAdmin(actor(request));
+    const { sourceId } = z.object({ sourceId: id }).parse(request.params);
+    sourceById(store, sourceId);
+    return {
+      running: refresh.isScanning(sourceId),
+      ...refresh.admission(sourceId),
+      attempt:
+        store.db
+          .prepare(
+            "SELECT last_attempt_ms,last_completed_ms,last_success_ms,last_error FROM refresh_attempts WHERE source_id=?",
+          )
+          .get(sourceId) ?? null,
+    };
   });
   app.post("/api/sources/:sourceId/import", async (request) => {
     requireAdmin(actor(request));
@@ -1094,7 +1152,16 @@ export function createServer(
   app.get("/api/generation/jobs/:jobId", async (request) => {
     requireAdmin(actor(request));
     const { jobId } = z.object({ jobId: id }).parse(request.params);
-    return { ...generation.get(jobId), items: generation.tasks(jobId) };
+    const { offset, limit } = z
+      .object({
+        offset: z.coerce.number().int().min(0).max(15000).default(0),
+        limit: z.coerce.number().int().min(1).max(100).default(100),
+      })
+      .parse(request.query);
+    return {
+      ...generation.summary(jobId),
+      ...generation.taskPage(jobId, offset, limit),
+    };
   });
   app.post("/api/generation/jobs/:jobId/cancel", async (request, reply) => {
     requireAdmin(actor(request));
@@ -1475,7 +1542,7 @@ export function createServer(
     return (
       store.db
         .prepare(
-          "SELECT * FROM channels WHERE archived=0 AND (?='admin' OR visibility='shared' OR owner_account_id=?) ORDER BY name,id",
+          "SELECT channels.*,EXISTS(SELECT 1 FROM active_schedules a WHERE a.channel_id=channels.id) AS has_programming FROM channels WHERE archived=0 AND (?='admin' OR visibility='shared' OR owner_account_id=?) ORDER BY name,id",
         )
         .all(account.role, account.id) as unknown as Channel[]
     ).filter((channel) => {

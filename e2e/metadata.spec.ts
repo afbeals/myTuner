@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8786" });
@@ -18,6 +19,7 @@ test("metadata modal preserves failed drafts, previews file availability and upd
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -25,7 +27,7 @@ test("metadata modal preserves failed drafts, previews file availability and upd
   await page
     .getByRole("article")
     .filter({ hasText: "Orbit Patrol" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await page
     .getByRole("button", { name: "Edit information", exact: true })
@@ -43,8 +45,12 @@ test("metadata modal preserves failed drafts, previews file availability and upd
   await modal
     .getByLabel("Manual description", { exact: true })
     .fill("A custom description with <b>plain text</b>.");
-  page.once("dialog", (d) => d.dismiss());
   await page.keyboard.press("Escape");
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(modal).toBeVisible();
   await page.route(
     "**/metadata/save",
@@ -72,7 +78,7 @@ test("metadata modal preserves failed drafts, previews file availability and upd
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1024 });
     await modal.evaluate((el) => {
-      el.scrollTop = 0;
+      (el.querySelector(".dialog-body") ?? el).scrollTop = 0;
     });
     await expect(modal).toHaveScreenshot(`metadata-editor-${width}.png`);
     expect(
@@ -106,7 +112,7 @@ test("metadata modal preserves failed drafts, previews file availability and upd
   await page
     .getByRole("article")
     .filter({ hasText: "Metadata proof show" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await page
     .getByRole("button", { name: "Edit information", exact: true })

@@ -18,7 +18,7 @@ Both matching captions are discovered for episode 1. Matching is Unicode-normali
 
 ## Configure search locations
 
-As an administrator, open **Sources → Configure** for the source, then **Subtitle search locations**. Configure automatic discovery, comma-separated relative subtitle subdirectories, recursion depth 0–4 and an optional separate server/container subtitle root. Up to eight relative subdirectories are accepted. These settings are independent of descriptive NFO metadata locations.
+As an administrator, open **Sources → Configure → Subtitles**. Set **Find subtitles during scans**, optional **Separate subtitle directory**, and the subtitle folder names. **Include subfolders inside subtitle folders** enables bounded recursive discovery; **Advanced subtitle limits → Maximum subfolder levels** exposes depth 0–4 when needed. Up to eight relative subtitle folders are accepted. The shared folder chooser can select permitted directories; manual paths remain available. These settings are independent of descriptive NFO metadata locations.
 
 A separate root mirrors the media source's relative directory structure. If the source is `/media/shows`, the video above has relative path `Orbit/Season 1/Orbit.S01E01.mkv`; a separate root `/subtitles/shows` searches:
 
@@ -29,11 +29,11 @@ A separate root mirrors the media source's relative directory structure. If the 
 
 The root must already exist and be readable by the server. Mount it read-only in Docker; see [deployment](DEPLOYMENT.md#optional-separate-subtitle-mount). It must not overlap application writable storage or another media source. Traversal and symlink escapes are rejected.
 
-**Save subtitle settings** persists configuration but does not run a scan. Scan the source or open a video's details and choose **Check / Rescan subtitles**. A settings change marks prior associations as needing a check before playback. Cancel restores the saved settings; closing/navigating with a draft asks before discarding it. Failed saves preserve the draft. A concurrent save fails with a conflict; reopen/reload and review the current configuration before retrying.
+**Save configuration** in the modal footer commits subtitle settings together with staged metadata, integration and scan-schedule settings. It does not start a scan. Disconnecting an integration is also staged until this save. Scan the source or open a video's details and choose **Check / Rescan subtitles**. A settings change marks prior associations as needing a check before playback. Cancel restores the saved settings; closing/navigating with a draft asks before discarding it. Failed saves preserve the draft. A concurrent save fails with a conflict; reopen/reload and review the current configuration before retrying.
 
 ## Inspect and manually associate a file
 
-Open **Library → show/folder/movie → video details**. **Stored technical metadata** labels embedded streams. **Subtitle discovery** lists external formats, language/forced/SDH, origin, support/status and last check. Administrators also see paths relative to the configured roots. Viewers receive authorized labels/status without raw filesystem locations.
+Open **My Network → Your library → show/folder/movie → video details**. **Stored technical metadata** labels embedded streams. **Subtitle discovery** lists external formats, language/forced/SDH, origin, support/status and last check. Administrators also see paths relative to the configured roots. Viewers receive authorized labels/status without raw filesystem locations.
 
 Status meanings:
 

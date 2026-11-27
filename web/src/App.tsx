@@ -1,3 +1,5 @@
+import { SecretField } from "./SecretFields";
+import { NetworkPage } from "./Network";
 import { OperationsPage } from "./Administration";
 import { allowNavigation } from "./navigation";
 import { readResourceRoute, type ResourceTarget } from "./resource-route";
@@ -37,19 +39,52 @@ export function App() {
     [profilesLoaded, setProfilesLoaded] = useState(false),
     [profilesError, setProfilesError] = useState<unknown>(null),
     [profileId, setProfileId] = useState(""),
-    [page, setPage] = useState(currentRoute()),
+    [requestedPage, setPage] = useState(currentRoute()),
     [resource, setResource] = useState(readResourceRoute()),
     [version, setVersion] = useState(0),
     [loading, setLoading] = useState(true),
     [error, setError] = useState<unknown>(null),
+    [identityTick, setIdentityTick] = useState(0),
+    [startupAccount, setStartupAccount] = useState<Account | null>(null),
+    [startupError, setStartupError] = useState<unknown>(null),
+    [startupBusy, setStartupBusy] = useState(false),
     [menu, setMenu] = useState(false),
     [profilePicker, setProfilePicker] = useState(false),
     [watchId, setWatchId] = useState<string | null>(null),
     [draft, setDraft] = useState<Selection | null>(null);
-  const acceptedHash = useRef(location.hash);
+  const page =
+    account?.role === "viewer" &&
+    [
+      "channels",
+      "library",
+      "subscriptions",
+      "accounts",
+      "sources",
+      "generated",
+      "operations",
+    ].includes(requestedPage)
+      ? "watch"
+      : requestedPage;
+  const profileIdentity = useRef(profileId);
+  profileIdentity.current = profileId;
+  const startupSequence = useRef(0);
+  const helpReturn = useRef("#watch");
+  const acceptedHash = useRef(location.hash),
+    navigationSequence = useRef(0);
+  useEffect(() => {
+    if (account?.role === "viewer" && page !== requestedPage && !resource) {
+      acceptedHash.current = "#watch";
+      history.replaceState(
+        null,
+        "",
+        location.pathname + location.search + "#watch",
+      );
+      setPage("watch");
+    }
+  }, [account?.role, page, requestedPage, resource]);
   const changed = () => setVersion((v) => v + 1);
-  const chooseProfile = (id: string) => {
-    if (!allowNavigation()) return;
+  const chooseProfile = async (id: string) => {
+    if (!(await allowNavigation())) return;
     if (resource) {
       setResource(null);
       acceptedHash.current = `#${page}`;
@@ -59,11 +94,25 @@ export function App() {
         location.pathname + location.search + acceptedHash.current,
       );
     }
+    try {
+      sessionStorage.setItem(
+        "mytuner:profile",
+        JSON.stringify({ accountId: account?.id, id }),
+      );
+    } catch {}
     setProfileId(id);
     setWatchId(null);
     setProfilePicker(false);
   };
   const clearIdentityState = () => {
+    startupSequence.current++;
+    setStartupAccount(null);
+    setStartupError(null);
+    setStartupBusy(false);
+    navigationSequence.current++;
+    try {
+      sessionStorage.removeItem("mytuner:profile");
+    } catch {}
     setDraft(null);
     setWatchId(null);
     setProfilePicker(false);
@@ -79,8 +128,21 @@ export function App() {
     setPage(currentRoute());
     acceptedHash.current = location.hash;
   };
+  const signOut = async () => {
+    if (!(await allowNavigation())) return;
+    try {
+      await api("/api/auth/logout", "POST");
+      clearIdentityState();
+      setAccount(null);
+      setCsrf(null);
+    } catch (failure) {
+      setError(failure);
+    }
+  };
   useEffect(() => {
     let current = true;
+    setLoading(true);
+    setError(null);
     void api<Account>("/api/auth/me")
       .then((a) => {
         if (current) setAccount(a);
@@ -97,8 +159,12 @@ export function App() {
       setAccount(null);
       setCsrf(null);
     };
-    const hash = () => {
-      if (!allowNavigation()) {
+    const hash = async () => {
+      const targetHash = location.hash,
+        sequence = ++navigationSequence.current;
+      const permitted = await allowNavigation();
+      if (sequence !== navigationSequence.current) return;
+      if (!permitted) {
         history.replaceState(
           null,
           "",
@@ -106,10 +172,16 @@ export function App() {
         );
         return;
       }
-      acceptedHash.current = location.hash;
-      setResource(readResourceRoute());
-      setPage(currentRoute());
+      if (
+        currentRoute(targetHash) === "setup" &&
+        currentRoute(acceptedHash.current) !== "setup"
+      )
+        helpReturn.current = acceptedHash.current;
+      acceptedHash.current = targetHash;
+      setResource(readResourceRoute(targetHash));
+      setPage(currentRoute(targetHash));
       setMenu(false);
+      requestAnimationFrame(() => document.getElementById("main")?.focus());
     };
     window.addEventListener("mytuner:expired", expired);
     window.addEventListener("hashchange", hash);
@@ -118,7 +190,7 @@ export function App() {
       window.removeEventListener("mytuner:expired", expired);
       window.removeEventListener("hashchange", hash);
     };
-  }, []);
+  }, [identityTick]);
   useEffect(() => {
     if (!account) {
       setProfilesLoaded(false);
@@ -129,8 +201,28 @@ export function App() {
     void api<Profile[]>("/api/profiles")
       .then((rows) => {
         if (!current) return;
+        if (
+          profileIdentity.current &&
+          !rows.some((row) => row.id === profileIdentity.current)
+        ) {
+          setWatchId(null);
+          setDraft(null);
+        }
         setProfiles(rows);
         setProfilesLoaded(true);
+        let remembered = "";
+        try {
+          const saved = JSON.parse(
+            sessionStorage.getItem("mytuner:profile") ?? "null",
+          );
+          if (
+            saved?.accountId === account.id &&
+            rows.some((row) => row.id === saved.id)
+          )
+            remembered = saved.id;
+        } catch {}
+        if (!profileId && !remembered && !resource && rows.length > 1)
+          setProfilePicker(true);
         setProfileId((old) =>
           typeof resource === "object" &&
           resource &&
@@ -138,7 +230,7 @@ export function App() {
             ? resource.profileId
             : rows.some((p) => p.id === old)
               ? old
-              : (rows[0]?.id ?? ""),
+              : remembered || (rows[0]?.id ?? ""),
         );
       })
       .catch((e) => {
@@ -148,24 +240,89 @@ export function App() {
       current = false;
     };
   }, [account, version, resource]);
+  useEffect(() => {
+    if (!menu) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+        setMenu(false);
+        document.querySelector<HTMLButtonElement>(".mobile-menu")?.focus();
+      }
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [menu]);
+  const finishStartup = async (identity: Account) => {
+    const sequence = ++startupSequence.current;
+    setStartupAccount(identity);
+    setStartupBusy(true);
+    setStartupError(null);
+    try {
+      await api("/api/playback/startup", "POST");
+      if (sequence !== startupSequence.current) return;
+      clearIdentityState();
+      setAccount(identity);
+    } catch (failure) {
+      if (sequence !== startupSequence.current) return;
+      if (failure instanceof ApiError && failure.status === 401) {
+        clearIdentityState();
+        setAccount(null);
+        setCsrf(null);
+      } else setStartupError(failure);
+    } finally {
+      if (sequence === startupSequence.current) setStartupBusy(false);
+    }
+  };
   const watch = (id: string) => {
     setWatchId(id);
     location.hash = "watch";
   };
-  if (page === "setup") return <HelpPage />;
+  if (page === "setup") return <HelpPage returnTo={helpReturn.current} />;
   if (loading)
     return (
       <main className="login">
         <p role="status">Connecting to your network…</p>
       </main>
     );
+  if (startupAccount)
+    return (
+      <main className="login">
+        <h1>Signed in as {startupAccount.username}</h1>
+        <p>Preparing your viewing session.</p>
+        <ErrorBox error={startupError} />
+        <button
+          disabled={startupBusy}
+          onClick={() => void finishStartup(startupAccount)}
+        >
+          {startupBusy ? "Preparing…" : "Retry startup"}
+        </button>
+        <a href="#setup">Server and TV setup help</a>
+      </main>
+    );
+  if (!account && error)
+    return (
+      <main className="login">
+        <h1>Unable to connect to your server</h1>
+        <ErrorBox error={error} />
+        <button onClick={() => setIdentityTick((n) => n + 1)}>
+          Retry connection
+        </button>
+        <a href="#setup">Server and TV setup help</a>
+      </main>
+    );
   if (!account)
     return (
       <main className="login">
         <h1>myTuner</h1>
+        {sessionStorage.getItem("mytuner:notice") && (
+          <p className="notice" role="status">
+            {sessionStorage.getItem("mytuner:notice")}
+          </p>
+        )}
         <p className="eyebrow">Your personal television network</p>
         <Form
           submit="Sign in"
+          busyLabel="Signing in…"
+          guardDraft={false}
           onSave={async (data) => {
             const result = await api<{ account: Account; csrfToken: string }>(
               "/api/auth/browser",
@@ -175,10 +332,9 @@ export function App() {
                 password: String(data.get("password")),
               },
             );
+            sessionStorage.removeItem("mytuner:notice");
             setCsrf(result.csrfToken);
-            await api("/api/playback/startup", "POST");
-            clearIdentityState();
-            setAccount(result.account);
+            await finishStartup(result.account);
           }}
         >
           <h2>Welcome back</h2>
@@ -190,7 +346,7 @@ export function App() {
             required
             maxLength={64}
           />
-          <Field
+          <SecretField
             label="Password"
             name="password"
             type="password"
@@ -222,10 +378,8 @@ export function App() {
   };
   const profile = profiles.find((p) => p.id === profileId);
   const nav = [
-    ...(account.role !== "viewer"
-      ? ["channels", "library", "subscriptions"]
-      : []),
     "watch",
+    ...(account.role !== "viewer" ? ["channels"] : []),
     "profiles",
     ...(account.role === "admin"
       ? ["accounts", "sources", "generated", "operations"]
@@ -235,18 +389,18 @@ export function App() {
     "reports",
   ];
   const labels: Record<string, string> = {
-    channels: "Channels",
-    library: "Library",
+    channels: "My Network",
+    library: "My Network",
     subscriptions: "Subscriptions",
     watch: "Watch TV",
     profiles: "Profiles",
     accounts: "Accounts",
     sources: "Sources",
-    generated: "Generated assets",
-    operations: "Setup & server health",
+    generated: "Generated Assets",
+    operations: "Setup & Server Health",
     "connect-tv": "Connect TV",
-    sessions: "Devices & sessions",
-    reports: account.role === "admin" ? "Problem reports" : "Your reports",
+    sessions: "Devices & Sessions",
+    reports: account.role === "admin" ? "Problem Reports" : "Your Reports",
   };
   const needsProfile = [
     "channels",
@@ -266,7 +420,7 @@ export function App() {
               <button
                 key={p.id}
                 className="profile-card secondary"
-                onClick={() => {
+                onClick={async () => {
                   chooseProfile(p.id);
                 }}
               >
@@ -293,7 +447,10 @@ export function App() {
         Skip to content
       </a>
       <div className="mobile-header">
-        <a className="brand" href="#channels">
+        <a
+          className="brand"
+          href={account.role === "viewer" ? "#watch" : "#channels"}
+        >
           myTuner
         </a>
         <button
@@ -306,7 +463,10 @@ export function App() {
         </button>
       </div>
       <aside id="navigation" className={menu ? "rail open" : "rail"}>
-        <a href="#channels" className="brand">
+        <a
+          href={account.role === "viewer" ? "#watch" : "#channels"}
+          className="brand"
+        >
           myTuner
         </a>
         <p className="eyebrow">Your personal network</p>
@@ -327,19 +487,7 @@ export function App() {
             {account.role} · v{appVersion}
           </small>
           <a href="#setup">Setup & TV help</a>
-          <button
-            className="secondary"
-            onClick={() => {
-              if (!allowNavigation()) return;
-              void api("/api/auth/logout", "POST")
-                .then(() => {
-                  clearIdentityState();
-                  setAccount(null);
-                  setCsrf(null);
-                })
-                .catch(setError);
-            }}
-          >
+          <button className="secondary" onClick={() => void signOut()}>
             Sign out
           </button>
         </div>
@@ -347,9 +495,11 @@ export function App() {
       <main id="main" tabIndex={-1}>
         <div className="workspace-bar">
           <span className="eyebrow">
-            My network / {labels[page] ?? "Channels"}
+            {page === "channels" || page === "library"
+              ? "My Network"
+              : `${needsProfile ? "My Network" : "Network Settings"} / ${labels[page] ?? "My Network"}`}
           </span>
-          <div className="profile-switch">
+          <div className="profile-switch" hidden={page === "connect-tv"}>
             <span className="badge">{account.role}</span>
             <Select
               label="Current profile"
@@ -388,21 +538,44 @@ export function App() {
           <p role="status">Opening permitted profile…</p>
         ) : needsProfile && !profile ? (
           <section className="empty">
-            <h1>Create your first profile</h1>
+            <h1>
+              {account.role === "admin"
+                ? "Create your first profile"
+                : "No profiles available"}
+            </h1>
             <p>
-              Profiles hold the source permissions and channel subscriptions for
-              a person or room.
+              {account.role === "admin"
+                ? "Profiles hold the library access and channel subscriptions for a person or room."
+                : "Ask an administrator to give this account access to a viewing profile."}
             </p>
-            <a href="#profiles">Set up profiles →</a>
+            {account.role === "admin" && (
+              <a href="#profiles">Set up profiles →</a>
+            )}
           </section>
         ) : needsProfile && profile?.locked ? (
           <Form
+            guardDraft={false}
+            focusOnError="pin"
             submit="Unlock profile"
+            busyLabel="Unlocking…"
             onSave={async (data) => {
-              await api(`/api/profiles/${profileId}/unlock`, "POST", {
-                pin: String(data.get("pin")),
-              });
-              changed();
+              try {
+                await api(`/api/profiles/${profileId}/unlock`, "POST", {
+                  pin: String(data.get("pin")),
+                });
+                changed();
+              } catch (failure) {
+                if (failure instanceof ApiError && failure.status === 403) {
+                  const input =
+                    document.querySelector<HTMLInputElement>(
+                      'input[name="pin"]',
+                    );
+                  if (input) {
+                    input.value = "";
+                  }
+                }
+                throw failure;
+              }
             }}
           >
             <h1>Unlock {profile.name}</h1>
@@ -413,7 +586,8 @@ export function App() {
             >
               Switch profile
             </button>
-            <Field
+            <SecretField
+              kind="pin"
               label="TV PIN"
               name="pin"
               type="password"
@@ -421,17 +595,18 @@ export function App() {
               pattern="[0-9]{4,8}"
               autoComplete="off"
               required
+              hint="4–8 digits. Forgotten PIN? Ask the profile owner or administrator."
             />
           </Form>
         ) : (
-          <div key={`${profileId}:${page}`}>
-            {page === "library" ? (
-              <LibraryPage
+          <div
+            key={`${account.id}:${profileId}:${page === "library" ? "channels" : page}`}
+          >
+            {page === "library" || page === "channels" ? (
+              <NetworkPage
                 {...workspace}
-                onUse={(selection) => {
-                  setDraft(selection);
-                  location.hash = "channels";
-                }}
+                initialSelection={draft}
+                onSelectionUsed={() => setDraft(null)}
               />
             ) : page === "accounts" && account.role === "admin" ? (
               <AccountsPage {...workspace} />
@@ -446,7 +621,7 @@ export function App() {
             ) : page === "subscriptions" && account.role !== "viewer" ? (
               <SubscriptionsPage {...workspace} />
             ) : page === "connect-tv" ? (
-              <PairingPage />
+              <PairingPage account={account} onChangeAccount={signOut} />
             ) : page === "reports" ? (
               <ReportsInbox key={account.id} admin={account.role === "admin"} />
             ) : page === "sessions" ? (

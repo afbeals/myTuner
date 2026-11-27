@@ -1,3 +1,4 @@
+import { applicationVersion } from "./version.js";
 import { randomUUID } from "node:crypto";
 import type { Store } from "./database.js";
 import type { Account, Media } from "./domain.js";
@@ -190,6 +191,7 @@ export class ProblemReports {
     category: ReportCategory,
     client: "browser" | "tv",
     now: number,
+    clientVersion?: string,
   ): Context {
     const row = this.store.db
       .prepare("SELECT * FROM playback_sessions WHERE id=? AND account_id=?")
@@ -245,7 +247,9 @@ export class ProblemReports {
       summary: {
         category,
         client,
-        appVersion: "0.2.0",
+        appVersion:
+          clientVersion ??
+          (client === "browser" ? applicationVersion : "unknown"),
         serverTime: now,
         channelId,
         entryId: String(ref.id),
@@ -268,9 +272,17 @@ export class ProblemReports {
     category: ReportCategory,
     client: "browser" | "tv",
     now = Date.now(),
+    clientVersion?: string,
   ) {
     this.expireDrafts(now);
-    const context = this.context(account, sessionId, category, client, now);
+    const context = this.context(
+      account,
+      sessionId,
+      category,
+      client,
+      now,
+      clientVersion,
+    );
     const own = [...this.drafts].filter(([, d]) => d.accountId === account.id);
     if (own.length >= 5) this.drafts.delete(own[0]![0]);
     invariant(
@@ -319,6 +331,24 @@ export class ProblemReports {
       createdMs: row.created_ms,
       acknowledgedMs: row.acknowledged_ms,
       summary: JSON.parse(String(row.summary_json)) as ReportSummary,
+      context: {
+        channelName:
+          this.store.db
+            .prepare("SELECT name FROM channels WHERE id=?")
+            .get(String(row.channel_id))?.name ?? "Unavailable channel",
+        profileName:
+          this.store.db
+            .prepare("SELECT name FROM profiles WHERE id=?")
+            .get(String(row.profile_id))?.name ?? "Unavailable profile",
+        accountName:
+          this.store.db
+            .prepare("SELECT username FROM accounts WHERE id=?")
+            .get(String(row.account_id))?.username ?? "Unavailable account",
+        title:
+          this.store.db
+            .prepare("SELECT title FROM media WHERE id=?")
+            .get(String(row.media_id))?.title ?? "Unavailable video",
+      },
     };
   }
   send(account: Account, draftId: string, requestId: string, now = Date.now()) {
@@ -392,12 +422,25 @@ export class ProblemReports {
       );
     });
   }
-  list(account: Account, offset = 0, limit = 25, now = Date.now()) {
+  list(
+    account: Account,
+    offset = 0,
+    limit = 25,
+    now = Date.now(),
+    status: "all" | "new" | "acknowledged" = "all",
+  ) {
     const rows = this.store.db
       .prepare(
-        "SELECT * FROM problem_reports WHERE created_ms>? AND (?='admin' OR account_id=?) ORDER BY created_ms DESC,rowid DESC",
+        "SELECT * FROM problem_reports WHERE created_ms>? AND (?='admin' OR account_id=?) AND(?='all' OR (?='new' AND acknowledged_ms IS NULL) OR (?='acknowledged' AND acknowledged_ms IS NOT NULL)) ORDER BY created_ms DESC,rowid DESC",
       )
-      .all(now - this.days * 86400000, account.role, account.id);
+      .all(
+        now - this.days * 86400000,
+        account.role,
+        account.id,
+        status,
+        status,
+        status,
+      );
     const allowed = rows.filter((row) => {
       try {
         this.authorized(account, row);

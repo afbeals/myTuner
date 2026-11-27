@@ -12,6 +12,7 @@ export function browseLibraryPage(
   profileId: string,
   input: {
     search: string;
+    titleOnly?: boolean;
     sourceId?: string | undefined;
     kind: string;
     offset: number;
@@ -22,7 +23,7 @@ export function browseLibraryPage(
     store,
     account,
     profileId,
-    input.search,
+    input.titleOnly ? "" : input.search,
     input.sourceId,
   );
   const sourceKinds = new Map(library.sources.map((s) => [s.id, s.kind]));
@@ -78,8 +79,25 @@ export function browseLibraryPage(
   savedCollections.forEach((_, index) =>
     refs.push({ type: "savedCollections", index, kind: "collections" }),
   );
+  const title = (r: (typeof refs)[number]) =>
+    r.type === "shows"
+      ? library.shows[r.index]!.title
+      : r.type === "movies"
+        ? library.movies[r.index]!.title
+        : r.type === "folders"
+          ? library.folders[r.index]!.directory.split("/").at(-1) ||
+            library.sources.find((s) => s.id === r.sourceId)?.name ||
+            ""
+          : r.type === "movieCollections"
+            ? library.movieCollections[r.index]!.title
+            : savedCollections[r.index]!.name;
   const permitted = refs.filter(
     (r) =>
+      (!input.titleOnly ||
+        !input.search ||
+        title(r)
+          .toLocaleLowerCase()
+          .includes(input.search.toLocaleLowerCase())) &&
       r.kind !== "commercials" &&
       (!input.sourceId || r.sourceId === input.sourceId) &&
       (input.kind === "all" || r.kind === input.kind),
@@ -93,6 +111,11 @@ export function browseLibraryPage(
   const includes = (type: string, index: number) =>
     selected.get(type)?.has(index) ?? false;
   return {
+    revision: Number(
+      store.db
+        .prepare("SELECT revision FROM catalog_revision WHERE id=1")
+        .get()!.revision,
+    ),
     sources: library.sources,
     shows: library.shows.filter((_, i) => includes("shows", i)),
     movies: hydrateLibraryMovies(

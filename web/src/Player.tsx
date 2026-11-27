@@ -1,3 +1,7 @@
+import { useDraftNavigation } from "./navigation";
+import { Info } from "./Info";
+import { duration, playhead } from "./ui";
+import { confirmAction } from "./confirmation";
 import { Artwork } from "./Library";
 import {
   readPreferences,
@@ -10,7 +14,7 @@ import { RecentPrograms, ProblemReport } from "./Retained";
 import { useEffect, useRef, useState } from "react";
 import type Hls from "hls.js";
 import type { Workspace } from "./App";
-import type { Delivery, GuideChannel, Media, Playback } from "./types";
+import type { Delivery, GuideChannel, Media, Playback, Track } from "./types";
 import { api, ApiError } from "./api";
 import {
   Action,
@@ -19,10 +23,40 @@ import {
   Load,
   Select,
   Modal,
+  ModalCancel,
   time,
   useRemote,
 } from "./ui";
 import { eventId, parseVtt, type Cue } from "./playback-utils";
+const trackLanguages = (() => {
+  try {
+    return new Intl.DisplayNames(undefined, {
+      type: "language",
+      fallback: "none",
+    });
+  } catch {
+    return null;
+  }
+})();
+function trackLabel(track: Track) {
+  const tag = language(track.language);
+  let name: string | undefined;
+  if (tag) {
+    try {
+      name = trackLanguages?.of(tag);
+    } catch {
+      /* Keep the supplied label for an unknown language tag. */
+    }
+  }
+  const title = track.title?.trim();
+  if (
+    title &&
+    name &&
+    !title.toLocaleLowerCase().includes(name.toLocaleLowerCase())
+  )
+    return `${title} · ${name}`;
+  return title || name || track.language || `Track ${track.index}`;
+}
 export function WatchPage(
   props: Workspace & { channelId: string | null; onLeave: () => void },
 ) {
@@ -64,31 +98,27 @@ export function WatchPage(
     );
   return (
     <>
-      <div className="silver-bar">
-        <h2>myTuner</h2>
-        <strong>{profile?.name}</strong>
-        <button className="secondary" onClick={props.chooseProfile}>
-          Switch profile
-        </button>
-        <a
-          className="button secondary"
-          href={props.account.role === "viewer" ? "#profiles" : "#channels"}
-        >
-          My network
-        </a>
-        <span>{time(Date.now())}</span>
-      </div>
       <header className="page-head">
         <div>
-          <span className="eyebrow">{profile?.name} / Channels</span>
-          <h1>On your channels</h1>
-          <p>Now and next in one readable guide. Every channel joins live.</p>
+          <h1>Watch TV</h1>
+          <p>{profile?.name} · Select a channel to join live.</p>
         </div>
-        {props.account.role !== "viewer" && (
-          <a className="button secondary" href="#subscriptions">
-            Edit profile lineup
+        <div className="actions">
+          <button className="secondary" onClick={props.chooseProfile}>
+            Switch profile
+          </button>
+          <a
+            className="button secondary"
+            href={props.account.role === "viewer" ? "#profiles" : "#channels"}
+          >
+            {props.account.role === "viewer" ? "Profiles" : "My Network"}
           </a>
-        )}
+          {props.account.role !== "viewer" && (
+            <a className="button secondary" href="#subscriptions">
+              Edit profile lineup
+            </a>
+          )}
+        </div>
       </header>
       {recent && (
         <RecentPrograms
@@ -99,7 +129,7 @@ export function WatchPage(
         />
       )}
       <Load {...guide} retry={guide.reload} />
-      <div className="browser-guide-layout">
+      <div className="browser-guide-layout watch-guide-layout">
         <div className="guide-list">
           {guide.data?.channels.map((c) => {
             const now = Date.now(),
@@ -223,6 +253,8 @@ function Player(
     [browseOpen, setBrowseOpen] = useState(false),
     [overlayOpen, setOverlayOpen] = useState(true),
     [captionError, setCaptionError] = useState<unknown>(null),
+    [captionRetry, setCaptionRetry] = useState(0),
+    [accessEnded, setAccessEnded] = useState(false),
     [preferences, setPreferences] = useState(() =>
       readPreferences(props.profileId),
     );
@@ -234,21 +266,54 @@ function Player(
     entryId: string | undefined;
     index: number;
   } | null>(null);
+  const accessStopped = useRef(false);
+  const failure = pollError ?? error;
+  useEffect(() => {
+    if (
+      accessStopped.current ||
+      !(failure instanceof ApiError) ||
+      ![403, 404].includes(failure.status)
+    )
+      return;
+    accessStopped.current = true;
+    controlSequence.current++;
+    controlPending.current = false;
+    controlRecovery.current = false;
+    video.current?.pause();
+    hls.current?.stopLoad();
+    snapshot.current = null;
+    setSession(null);
+    setDelivery(null);
+    setMedia(null);
+    setPausedFrame(undefined);
+    cues.current = [];
+    setCue("");
+    setCaptionError(null);
+    setAccessEnded(true);
+    setLoading(false);
+    setControlling(false);
+    setReportOpen(false);
+    setRecentOpen(false);
+    setBrowseOpen(false);
+    props.changed();
+  }, [failure]);
   const preferenceRef = useRef(preferences);
   const savePreferences = (next: ViewingPreferences) => {
     preferenceRef.current = next;
     setPreferences(next);
     storePreferences(props.profileId, next);
   };
-  const tune = (id: string) => {
+  const tune = async (id: string) => {
     if (
       !snapshot.current?.paused ||
-      window.confirm(
-        "Watch this channel live and discard the current paused position?",
-      )
+      (await confirmAction(
+        `Watch ${props.channels.find((item) => item.id === id)?.name ?? "the selected channel"} live and discard the current paused position?`,
+        { title: "Switch to live playback?", label: "Watch live" },
+      ))
     ) {
       setBrowseOpen(false);
-      props.watch(id);
+      if (id === props.channelId) await control("goLive");
+      else props.watch(id);
     }
   };
 
@@ -260,6 +325,8 @@ function Player(
     setError(null);
     setPollError(null);
     setLoading(true);
+    setAccessEnded(false);
+    accessStopped.current = false;
     controlPending.current = false;
     controlRecovery.current = false;
     setControlling(false);
@@ -268,7 +335,7 @@ function Player(
       id: string | undefined,
       timer: ReturnType<typeof setTimeout> | undefined;
     async function poll() {
-      if (!id || !current) return;
+      if (!id || !current || accessStopped.current) return;
       if (controlPending.current) {
         timer = setTimeout(() => void poll(), 1000);
         return;
@@ -298,7 +365,8 @@ function Player(
           hls.current?.stopLoad();
         }
       }
-      if (current) timer = setTimeout(() => void poll(), 1000);
+      if (current && !accessStopped.current)
+        timer = setTimeout(() => void poll(), 1000);
     }
     void api<Playback>("/api/playback/sessions", "POST", {
       profileId: props.profileId,
@@ -517,7 +585,8 @@ function Player(
       signal: controller.signal,
     })
       .then(async (r) => {
-        if (!r.ok) throw new Error("Subtitles unavailable");
+        if (!r.ok)
+          throw new Error("Subtitles unavailable. The video can keep playing.");
         return r.text();
       })
       .then((text) => {
@@ -527,7 +596,7 @@ function Player(
         if (!controller.signal.aborted) setCaptionError(e);
       });
     return () => controller.abort();
-  }, [subtitle, delivery]);
+  }, [subtitle, delivery, captionRetry]);
   useEffect(() => {
     const el = video.current;
     if (!el) return;
@@ -654,31 +723,79 @@ function Player(
       if (valid()) controlPending.current = false;
     }
   };
+  useDraftNavigation(
+    paused,
+    "Leave this paused playback? Switching profile or leaving Watch TV discards this device’s paused position and joins live when you return.",
+    { title: "Leave paused playback?", label: "Leave playback" },
+  );
+  const leave = async () => {
+    if (
+      !paused ||
+      (await confirmAction(
+        "Leave this playback and discard the current paused position?",
+        { title: "Leave paused playback?", label: "Open guide" },
+      ))
+    )
+      props.onLeave();
+  };
   const title =
       media?.metadata.seriesTitle ?? media?.title ?? "Channel playback",
     channel = props.channels.find((c) => c.id === props.channelId),
-    index = props.channels.findIndex((c) => c.id === props.channelId),
-    failure = pollError ?? error;
+    index = props.channels.findIndex((c) => c.id === props.channelId);
+  if (accessEnded)
+    return (
+      <>
+        <header className="page-head">
+          <h1>Playback stopped</h1>
+        </header>
+        <section className="panel" aria-label="Playback recovery">
+          <p role="alert">
+            This channel or viewing session is no longer available. Your
+            profile’s access or channel lineup may have changed.
+          </p>
+          <p>
+            Choose an available profile or return to its guide. If an
+            administrator restores access, you can try this channel again.
+          </p>
+          <div className="actions">
+            {props.chooseProfile && (
+              <button onClick={props.chooseProfile}>Choose profile</button>
+            )}
+            <button className="secondary" onClick={props.onLeave}>
+              Channel guide
+            </button>
+            <button
+              className="secondary"
+              onClick={() => setJoinAttempt((value) => value + 1)}
+            >
+              Retry after access is restored
+            </button>
+          </div>
+        </section>
+      </>
+    );
   return (
     <>
-      <div className="silver-bar">
-        <h2>myTuner</h2>
-        <strong>
-          {props.profiles.find((p) => p.id === props.profileId)?.name}
-        </strong>
-        <button className="secondary" onClick={props.chooseProfile}>
-          Switch profile
-        </button>
-        <button className="secondary" onClick={props.onLeave}>
-          Channel guide
-        </button>
-        <a
-          className="button secondary"
-          href={props.account.role === "viewer" ? "#profiles" : "#channels"}
-        >
-          My network
-        </a>
-      </div>
+      <header className="page-head">
+        <div>
+          <h1>Watch TV</h1>
+          <p>
+            {channel?.name ?? "Your channel"} ·{" "}
+            {session?.context?.title ?? media?.title ?? "Joining live…"}
+          </p>
+        </div>
+        <div className="actions">
+          <button className="secondary" onClick={() => void leave()}>
+            Channel guide
+          </button>
+          <a
+            className="button secondary"
+            href={props.account.role === "viewer" ? "#profiles" : "#channels"}
+          >
+            {props.account.role === "viewer" ? "Profiles" : "My Network"}
+          </a>
+        </div>
+      </header>
       {recentOpen && props.channelId && (
         <RecentPrograms
           profileId={props.profileId}
@@ -724,300 +841,417 @@ function Player(
           </div>
         </Modal>
       )}
-      <div
-        className={`video-stage ${overlayOpen ? "controls-open" : "controls-hidden"}`}
-        ref={stage}
-      >
-        <video
-          ref={video}
-          poster={pausedFrame}
-          playsInline
-          onError={() => {
-            if (!forceHls && delivery?.mode === "direct") setForceHls(true);
-            else {
-              setError(
-                new Error(
-                  "The video could not be played. Retry or choose another channel.",
-                ),
-              );
-              setLoading(false);
-            }
-          }}
-          onWaiting={() => setLoading(true)}
-          onPlaying={() => {
-            setLoading(false);
-            if (!controlPending.current && !snapshot.current?.paused)
-              setPausedFrame(undefined);
-          }}
-        />
-        {(loading || (session && !session.available) || Boolean(failure)) && (
-          <div className="video-status" role="status">
-            <p>
-              {failure instanceof Error
-                ? failure.message
-                : session && !session.available
-                  ? "This scheduled video is unavailable. The channel will continue at the next interval."
-                  : "Joining your channel…"}
-            </p>
-          </div>
-        )}
-        {cue && (
+      <div className="watch-layout">
+        <section className="watch-main" aria-label="Now playing">
           <div
-            className={`subtitle-cue caption-${preferences.size} caption-${preferences.background}`}
+            className={`video-stage ${overlayOpen ? "controls-open" : "controls-hidden"}`}
+            ref={stage}
           >
-            {cue}
-          </div>
-        )}
-        {!overlayOpen && (
-          <button
-            className="player-reveal secondary"
-            onClick={() => setOverlayOpen(true)}
-          >
-            Show controls
-          </button>
-        )}
-        <div className="player-overlay" hidden={!overlayOpen}>
-          <div>
-            <small>
-              {channel?.shortName} · {channel?.name ?? "Your channel"}
-            </small>
-            <h2>{title}</h2>
-            {session?.context && (
-              <div className="playback-context">
-                <p>
-                  {session.context.kind === "commercial"
-                    ? `Commercial · ${Math.ceil(session.context.remainingMs / 1000)} seconds remaining · ${session.context.program?.title ?? "Programming resumes next"}`
-                    : `${session.context.title}${session.context.seasonNumber === null ? "" : ` · S${session.context.seasonNumber} E${session.context.episodeNumber ?? "?"}`}`}
-                </p>
-                <progress
-                  aria-label="Current interval progress"
-                  max={session.context.entryDurationMs}
-                  value={Math.max(
-                    0,
-                    session.context.entryDurationMs -
-                      session.context.remainingMs,
-                  )}
-                />
-                <p>Next: {session.context.next?.title ?? "More to come"}</p>
+            <div className="picture-surface">
+              <video
+                ref={video}
+                poster={pausedFrame}
+                playsInline
+                onError={() => {
+                  if (!forceHls && delivery?.mode === "direct")
+                    setForceHls(true);
+                  else {
+                    setError(
+                      new Error(
+                        "The video could not be played. Retry or choose another channel.",
+                      ),
+                    );
+                    setLoading(false);
+                  }
+                }}
+                onWaiting={() => setLoading(true)}
+                onPlaying={() => {
+                  setLoading(false);
+                  if (!controlPending.current && !snapshot.current?.paused)
+                    setPausedFrame(undefined);
+                }}
+              />
+              {(loading ||
+                (session && !session.available) ||
+                Boolean(failure)) && (
+                <div className="video-status" role="status">
+                  <p>
+                    {failure instanceof Error
+                      ? failure.message
+                      : session && !session.available
+                        ? "This scheduled video is unavailable. The channel will continue at the next interval."
+                        : "Joining your channel…"}
+                  </p>
+                </div>
+              )}
+              {cue && !failure && (
+                <div
+                  className={`subtitle-cue caption-${preferences.size} caption-${preferences.background}`}
+                >
+                  {cue}
+                </div>
+              )}
+            </div>
+            {paused && session?.context && (
+              <div className="paused-status" role="status">
+                <strong>Paused · {session.context.title}</strong>
+                <span>
+                  {playhead(
+                    Math.max(
+                      0,
+                      session.context.entryDurationMs -
+                        session.context.remainingMs,
+                    ),
+                  )}{" "}
+                  / {playhead(session.context.entryDurationMs)}
+                </span>
               </div>
             )}
-            <div className="actions">
-              {needsPlay ? (
-                <Action
-                  task={async () => {
-                    await video.current?.play();
-                    setNeedsPlay(false);
-                  }}
-                >
-                  Play video
-                </Action>
-              ) : (
-                <Action
-                  disabled={!session || !session.available || controlling}
-                  task={() => control(paused ? "resume" : "pause")}
-                >
-                  {paused ? "Resume" : "Pause"}
-                </Action>
-              )}
-              <button className="secondary" onClick={props.onLeave}>
-                Channel guide
-              </button>
-              <button className="secondary" onClick={() => setBrowseOpen(true)}>
-                Browse channels
-              </button>
+            {!overlayOpen && (
               <button
-                className="secondary"
-                onClick={() => {
-                  setOverlayOpen(false);
-                  requestAnimationFrame(() =>
-                    stage.current
-                      ?.querySelector<HTMLButtonElement>(".player-reveal")
-                      ?.focus(),
-                  );
+                className="player-reveal secondary"
+                onClick={() => setOverlayOpen(true)}
+              >
+                Show controls
+              </button>
+            )}
+            <div className="player-overlay" hidden={!overlayOpen}>
+              <div>
+                <small>
+                  {channel?.shortName} · {channel?.name ?? "Your channel"}
+                </small>
+                <h2>{title}</h2>
+                {session?.context && (
+                  <div className="playback-context">
+                    <p>
+                      {session.context.kind === "commercial"
+                        ? `Commercial · ${Math.ceil(session.context.remainingMs / 1000)} seconds remaining · ${session.context.program?.title ?? "Programming resumes next"}`
+                        : `${session.context.title}${session.context.seasonNumber === null ? "" : ` · S${session.context.seasonNumber} E${session.context.episodeNumber ?? "?"}`}`}
+                    </p>
+                    <progress
+                      aria-label="Current interval progress"
+                      max={session.context.entryDurationMs}
+                      value={Math.max(
+                        0,
+                        session.context.entryDurationMs -
+                          session.context.remainingMs,
+                      )}
+                    />
+                    <p>Next: {session.context.next?.title ?? "More to come"}</p>
+                  </div>
+                )}
+                <div className="actions">
+                  {needsPlay ? (
+                    <Action
+                      task={async () => {
+                        await video.current?.play();
+                        setNeedsPlay(false);
+                      }}
+                    >
+                      Play video
+                    </Action>
+                  ) : (
+                    <Action
+                      disabled={
+                        !session ||
+                        !session.available ||
+                        controlling ||
+                        Boolean(failure)
+                      }
+                      task={() => control(paused ? "resume" : "pause")}
+                    >
+                      {paused ? "Resume" : "Pause"}
+                    </Action>
+                  )}
+
+                  <button
+                    className="secondary"
+                    onClick={() => setBrowseOpen(true)}
+                  >
+                    Browse channels
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={async () => {
+                      setOverlayOpen(false);
+                      requestAnimationFrame(() =>
+                        stage.current
+                          ?.querySelector<HTMLButtonElement>(".player-reveal")
+                          ?.focus(),
+                      );
+                    }}
+                  >
+                    Hide controls
+                  </button>
+
+                  {Boolean(failure) && (
+                    <button
+                      className="secondary"
+                      onClick={async () => {
+                        if (session) setRestart((v) => v + 1);
+                        else setJoinAttempt((v) => v + 1);
+                        setError(null);
+                      }}
+                    >
+                      Retry playback
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <span className="badge">
+                  {failure
+                    ? "Playback interrupted"
+                    : paused
+                      ? "Paused on this device"
+                      : session && session.behindLiveMs > 2000
+                        ? `${Math.round(session.behindLiveMs / 1000)} seconds behind live`
+                        : "● LIVE"}
+                </span>
+                {(paused || (session && session.behindLiveMs > 2000)) && (
+                  <div className="actions">
+                    <Action
+                      disabled={controlling}
+                      task={() => control("goLive")}
+                    >
+                      Go Live
+                    </Action>
+                  </div>
+                )}
+                <div className="actions">
+                  <button
+                    className="secondary"
+                    disabled={index <= 0}
+                    onClick={() => tune(props.channels[index - 1]!.id)}
+                  >
+                    ← Previous
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={index < 0 || index >= props.channels.length - 1}
+                    onClick={() => tune(props.channels[index + 1]!.id)}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <section className="panel player-details">
+            <h2>{media?.title ?? "Program information"}</h2>
+            <p>
+              {paused
+                ? "Paused on this device. Resume keeps your place; Go Live joins the current airing."
+                : session && session.behindLiveMs > 2000
+                  ? "Watching behind live on this device. Go Live joins the current airing."
+                  : "Watching this channel’s live timeline."}
+            </p>
+            <p>
+              {media?.title}
+              {media?.metadata.seasonNumber !== undefined
+                ? ` · S${media.metadata.seasonNumber} E${media.metadata.episodeNumber ?? "?"}`
+                : ""}
+            </p>
+            <p>{media?.metadata.overview}</p>
+            <h3>
+              Audio and captions{" "}
+              <Info title="Track preferences">
+                Languages and caption appearance are remembered for this browser
+                and profile. When a preferred track is unavailable, playback
+                uses default audio or captions off.
+              </Info>
+            </h3>
+            <div className="player-tools">
+              <Select
+                label="Audio"
+                value={audio}
+                onChange={(e) => {
+                  const index = Number(e.target.value);
+                  audioChosen.current = { entryId, index };
+                  savePreferences({
+                    ...preferences,
+                    audio: language(
+                      delivery?.tracks.find(
+                        (t) => t.type === "audio" && t.index === index,
+                      )?.language,
+                    ),
+                  });
+                  setAudio(index);
                 }}
               >
-                Hide controls
-              </button>
-              <button className="secondary" onClick={() => setRecentOpen(true)}>
-                Recently aired
-              </button>
-              <button
-                className="secondary"
-                disabled={!session}
-                onClick={() => setReportOpen(true)}
+                <option value={-1}>Default audio</option>
+                {delivery?.tracks
+                  .filter((t) => t.type === "audio")
+                  .map((t) => (
+                    <option key={t.index} value={t.index}>
+                      {trackLabel(t)} · {t.codec}
+                    </option>
+                  ))}
+              </Select>
+              <Select
+                label="Subtitles"
+                value={subtitle}
+                onChange={(e) => {
+                  const index = Number(e.target.value);
+                  subtitleChosen.current = { entryId, index };
+                  savePreferences({
+                    ...preferences,
+                    subtitle: language(
+                      delivery?.tracks.find(
+                        (t) => t.type === "subtitle" && t.index === index,
+                      )?.language,
+                    ),
+                    subtitleOff: index < 0,
+                  });
+                  setSubtitle(index);
+                }}
               >
-                Report a problem
-              </button>
-              {Boolean(failure) && (
+                <option value={-1}>Off</option>
+                {delivery?.tracks
+                  .filter((t) => t.type === "subtitle" && t.url)
+                  .map((t) => (
+                    <option key={t.index} value={t.index}>
+                      {trackLabel(t)}
+                    </option>
+                  ))}
+              </Select>
+              <Action
+                secondary
+                task={async () => {
+                  await stage.current?.requestFullscreen();
+                }}
+              >
+                Full screen
+              </Action>
+            </div>
+            {Boolean(captionError) && (
+              <div className="notice caption-recovery">
+                <ErrorBox error={captionError} />
+                <p>
+                  Retry captions, select another subtitle track, or choose Off.
+                  Your video keeps playing.
+                </p>
                 <button
                   className="secondary"
-                  onClick={() => {
-                    if (session) setRestart((v) => v + 1);
-                    else setJoinAttempt((v) => v + 1);
-                    setError(null);
-                  }}
+                  onClick={() => setCaptionRetry((value) => value + 1)}
                 >
-                  Retry playback
+                  Retry captions
                 </button>
-              )}
-            </div>
-          </div>
-          <div>
-            <span className="badge">
-              {paused
-                ? "Paused on this device"
-                : session && session.behindLiveMs > 2000
-                  ? `${Math.round(session.behindLiveMs / 1000)} seconds behind live`
-                  : "● LIVE"}
-            </span>
-            {(paused || (session && session.behindLiveMs > 2000)) && (
-              <div className="actions">
-                <Action disabled={controlling} task={() => control("goLive")}>
-                  Go Live
-                </Action>
               </div>
             )}
-            <div className="actions">
-              <button
-                className="secondary"
-                disabled={index <= 0}
-                onClick={() => tune(props.channels[index - 1]!.id)}
+            <details className="caption-settings">
+              <summary>Caption appearance and preferences</summary>
+              <div className="player-tools">
+                {" "}
+                <Select
+                  label="Caption size"
+                  value={preferences.size}
+                  onChange={(e) =>
+                    savePreferences({
+                      ...preferences,
+                      size: e.target.value as ViewingPreferences["size"],
+                    })
+                  }
+                >
+                  <option value="normal">Normal</option>
+                  <option value="large">Large</option>
+                  <option value="largest">Largest</option>
+                </Select>
+                <Select
+                  label="Caption background"
+                  value={preferences.background}
+                  onChange={(e) =>
+                    savePreferences({
+                      ...preferences,
+                      background: e.target
+                        .value as ViewingPreferences["background"],
+                    })
+                  }
+                >
+                  <option value="dark">Dark background</option>
+                  <option value="shadow">Text shadow</option>
+                </Select>
+              </div>{" "}
+              <p
+                className={`caption-sample caption-${preferences.size} caption-${preferences.background}`}
               >
-                ← Previous
-              </button>
-              <button
-                className="secondary"
-                disabled={index < 0 || index >= props.channels.length - 1}
-                onClick={() => tune(props.channels[index + 1]!.id)}
-              >
-                Next →
-              </button>
-            </div>
+                Caption preview: choose size and background for this browser and
+                profile.
+              </p>
+              <p className="muted">
+                Language and caption preferences are remembered for this device,
+                server and profile. Missing preferred tracks fall back to
+                default audio or subtitles off.
+              </p>
+              <p className="muted">
+                {delivery?.mode === "hls"
+                  ? "Compatible HLS stream"
+                  : "Direct playback"}{" "}
+                · Text subtitles only. Pause and Go Live affect this device.
+              </p>
+            </details>
+          </section>
+        </section>
+        <aside className="panel watch-controls" aria-label="Viewing controls">
+          <h2>Your channels</h2>
+          <p>
+            Profile:{" "}
+            <strong>
+              {
+                props.profiles.find((profile) => profile.id === props.profileId)
+                  ?.name
+              }
+            </strong>
+          </p>
+          <button className="secondary" onClick={props.chooseProfile}>
+            Switch profile
+          </button>
+          <Select
+            label="Watch channel"
+            value={props.channelId ?? ""}
+            onChange={(event) => void tune(event.target.value)}
+          >
+            {props.channels.map((channel) => (
+              <option key={channel.id} value={channel.id}>
+                {channel.shortName} · {channel.name}
+              </option>
+            ))}
+          </Select>
+          <p>
+            {paused
+              ? "Paused"
+              : session && session.behindLiveMs > 2000
+                ? `${duration(session.behindLiveMs)} behind live`
+                : "Live"}
+          </p>
+          <div className="actions">
+            <button className="secondary" onClick={() => setBrowseOpen(true)}>
+              Browse guide
+            </button>
+            <button className="secondary" onClick={() => setRecentOpen(true)}>
+              Recently aired
+            </button>
+            <button
+              className="secondary"
+              disabled={!session}
+              onClick={() => setReportOpen(true)}
+            >
+              Report a problem
+            </button>
           </div>
-        </div>
+          <h3>Up next</h3>
+          <p>{session?.context?.next?.title ?? "More to come"}</p>
+          <details>
+            <summary>Playback details</summary>
+            <p>
+              {delivery?.mode === "hls"
+                ? "Compatible stream"
+                : "Direct playback"}
+            </p>
+            <p>Pause, language and caption choices apply to this device.</p>
+          </details>
+        </aside>
       </div>
-      <section className="panel player-details">
-        <h3>
-          {paused
-            ? "Paused only on this device."
-            : "You joined this program midway. Switching channels joins the next channel live."}
-        </h3>
-        <p>
-          {media?.title}
-          {media?.metadata.seasonNumber !== undefined
-            ? ` · S${media.metadata.seasonNumber} E${media.metadata.episodeNumber ?? "?"}`
-            : ""}
-        </p>
-        <p>{media?.metadata.overview}</p>
-        <div className="player-tools">
-          <Select
-            label="Audio"
-            value={audio}
-            onChange={(e) => {
-              const index = Number(e.target.value);
-              audioChosen.current = { entryId, index };
-              savePreferences({
-                ...preferences,
-                audio: language(
-                  delivery?.tracks.find(
-                    (t) => t.type === "audio" && t.index === index,
-                  )?.language,
-                ),
-              });
-              setAudio(index);
-            }}
-          >
-            <option value={-1}>Default audio</option>
-            {delivery?.tracks
-              .filter((t) => t.type === "audio")
-              .map((t) => (
-                <option key={t.index} value={t.index}>
-                  {t.title ?? t.language ?? `Track ${t.index}`} · {t.codec}
-                </option>
-              ))}
-          </Select>
-          <Select
-            label="Subtitles"
-            value={subtitle}
-            onChange={(e) => {
-              const index = Number(e.target.value);
-              subtitleChosen.current = { entryId, index };
-              savePreferences({
-                ...preferences,
-                subtitle: language(
-                  delivery?.tracks.find(
-                    (t) => t.type === "subtitle" && t.index === index,
-                  )?.language,
-                ),
-                subtitleOff: index < 0,
-              });
-              setSubtitle(index);
-            }}
-          >
-            <option value={-1}>Off</option>
-            {delivery?.tracks
-              .filter((t) => t.type === "subtitle" && t.url)
-              .map((t) => (
-                <option key={t.index} value={t.index}>
-                  {t.title ?? t.language ?? `Track ${t.index}`}
-                </option>
-              ))}
-          </Select>
-          <Select
-            label="Caption size"
-            value={preferences.size}
-            onChange={(e) =>
-              savePreferences({
-                ...preferences,
-                size: e.target.value as ViewingPreferences["size"],
-              })
-            }
-          >
-            <option value="normal">Normal</option>
-            <option value="large">Large</option>
-            <option value="largest">Largest</option>
-          </Select>
-          <Select
-            label="Caption background"
-            value={preferences.background}
-            onChange={(e) =>
-              savePreferences({
-                ...preferences,
-                background: e.target.value as ViewingPreferences["background"],
-              })
-            }
-          >
-            <option value="dark">Dark background</option>
-            <option value="shadow">Text shadow</option>
-          </Select>
-          <Action
-            secondary
-            task={async () => {
-              await stage.current?.requestFullscreen();
-            }}
-          >
-            Full screen
-          </Action>
-        </div>
-        <ErrorBox error={captionError} />
-        <p
-          className={`caption-sample caption-${preferences.size} caption-${preferences.background}`}
-        >
-          Caption preview: choose size and background for this browser and
-          profile.
-        </p>
-        <p className="muted">
-          Language and caption preferences are remembered for this device,
-          server and profile. Missing preferred tracks fall back to default
-          audio or subtitles off.
-        </p>
-        <p className="muted">
-          {delivery?.mode === "hls"
-            ? "Compatible HLS stream"
-            : "Direct playback"}{" "}
-          · Text subtitles only. Pause and Go Live affect this device.
-        </p>
-      </section>
       {failure instanceof ApiError && failure.status === 403 && (
         <ErrorBox
           error={

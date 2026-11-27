@@ -1,7 +1,18 @@
-import { useRef, useState } from "react";
+import pkg from "../../package.json";
+import { confirmAction } from "./confirmation";
+import { useEffect, useRef, useState } from "react";
 import { eventId } from "./playback-utils";
 import { api } from "./api";
-import { Action, Empty, ErrorBox, Load, Modal, Select, useRemote } from "./ui";
+import {
+  Action,
+  Empty,
+  ErrorBox,
+  Load,
+  Modal,
+  ModalCancel,
+  Select,
+  useRemote,
+} from "./ui";
 interface Recent {
   retention: string;
   truncated: boolean;
@@ -168,20 +179,87 @@ export function ProblemReport({
   sessionId: string;
   onClose: () => void;
 }) {
-  const reviewSerial = useRef(0);
-  const [category, setCategory] = useState("picture"),
+  const serial = useRef(0),
+    [category, setCategory] = useState("picture"),
     [draft, setDraft] = useState<{
       draftId: string;
       summary: Summary;
       requestId: string;
     } | null>(null),
     [sent, setSent] = useState<string | null>(null),
-    [error, setError] = useState<unknown>(null);
+    [error, setError] = useState<unknown>(null),
+    [busy, setBusy] = useState(false);
+  const review = async () => {
+    const ticket = ++serial.current;
+    setBusy(true);
+    setDraft(null);
+    setError(null);
+    try {
+      const result = await api<{ draftId: string; summary: Summary }>(
+        `/api/playback/sessions/${sessionId}/report-preview`,
+        "POST",
+        { category, client: "browser", appVersion: pkg.version },
+      );
+      if (ticket === serial.current)
+        setDraft({ ...result, requestId: eventId() });
+    } catch (error) {
+      if (ticket === serial.current) setError(error);
+    } finally {
+      if (ticket === serial.current) setBusy(false);
+    }
+  };
+  const send = async () => {
+    if (!draft) return;
+    const ticket = serial.current;
+    setBusy(true);
+    try {
+      const result = await api<{ id: string }>("/api/problem-reports", "POST", {
+        draftId: draft.draftId,
+        requestId: draft.requestId,
+      });
+      if (ticket === serial.current) {
+        setSent(result.id);
+        setError(null);
+      }
+    } catch (error) {
+      if (ticket === serial.current)
+        setError(
+          new Error(
+            `Delivery unconfirmed. Retrying sends this report only once. ${error instanceof Error ? error.message : ""}`,
+          ),
+        );
+    } finally {
+      if (ticket === serial.current) setBusy(false);
+    }
+  };
   return (
-    <Modal title="Report a playback problem" onClose={onClose}>
+    <Modal
+      title="Report a playback problem"
+      onClose={onClose}
+      closeDisabled={busy}
+      footer={
+        <div className="actions">
+          {!sent &&
+            (draft ? (
+              <button disabled={busy} onClick={() => void send()}>
+                {busy
+                  ? "Sending…"
+                  : error
+                    ? "Retry sending report"
+                    : "Send report"}
+              </button>
+            ) : (
+              <button disabled={busy} onClick={() => void review()}>
+                {busy ? "Preparing…" : "Review summary"}
+              </button>
+            ))}
+          <ModalCancel>{sent ? "Done" : "Cancel"}</ModalCancel>
+        </div>
+      }
+    >
       <p>
-        Review the exact summary, then explicitly send it to your administrator.
-        No logs, media, screenshots, PINs or credentials are included.
+        Review the exact summary before sending it to your administrator. No
+        logs, media, screenshots, PINs or credentials are included.
       </p>
       {sent ? (
         <p role="status">Report sent. Reference {sent}</p>
@@ -190,72 +268,21 @@ export function ProblemReport({
           <Select
             label="Problem category"
             value={category}
-            onChange={(e) => {
-              reviewSerial.current++;
-              setCategory(e.target.value);
+            disabled={busy}
+            onChange={(event) => {
+              serial.current++;
+              setCategory(event.target.value);
               setDraft(null);
               setError(null);
             }}
           >
-            {["picture", "sound", "captions", "other"].map((c) => (
-              <option key={c} value={c}>
-                {c[0]!.toUpperCase() + c.slice(1)}
+            {["picture", "sound", "captions", "other"].map((value) => (
+              <option key={value} value={value}>
+                {value[0]!.toUpperCase() + value.slice(1)}
               </option>
             ))}
           </Select>
-          <Action
-            secondary
-            task={async () => {
-              const serial = ++reviewSerial.current;
-              setError(null);
-              setDraft(null);
-              try {
-                const preview = await api<{
-                  draftId: string;
-                  summary: Summary;
-                }>(
-                  `/api/playback/sessions/${sessionId}/report-preview`,
-                  "POST",
-                  { category, client: "browser" },
-                );
-                if (serial === reviewSerial.current)
-                  setDraft({ ...preview, requestId: eventId() });
-              } catch (e) {
-                if (serial === reviewSerial.current) setError(e);
-              }
-            }}
-          >
-            Review summary
-          </Action>
-          {draft && (
-            <>
-              <ReportDetails summary={draft.summary} />
-              <Action
-                task={async () => {
-                  const serial = reviewSerial.current;
-                  try {
-                    const r = await api<{ id: string }>(
-                      "/api/problem-reports",
-                      "POST",
-                      { draftId: draft.draftId, requestId: draft.requestId },
-                    );
-                    if (serial !== reviewSerial.current) return;
-                    setSent(r.id);
-                    setError(null);
-                  } catch (e) {
-                    if (serial !== reviewSerial.current) return;
-                    setError(
-                      new Error(
-                        `Not sent or delivery unconfirmed. Retry sends the same report once. ${e instanceof Error ? e.message : ""}`,
-                      ),
-                    );
-                  }
-                }}
-              >
-                {error ? "Retry sending report" : "Send report"}
-              </Action>
-            </>
-          )}
+          {draft && <ReportDetails summary={draft.summary} />}
           <ErrorBox error={error} />
         </>
       )}
@@ -264,91 +291,173 @@ export function ProblemReport({
 }
 export function ReportsInbox({ admin }: { admin: boolean }) {
   const [offset, setOffset] = useState(0),
-    data = useRemote<{
-      total: number;
-      retentionDays: number;
-      items: {
-        id: string;
-        createdMs: number;
-        acknowledgedMs: number | null;
-        summary: Summary;
-      }[];
-    }>(
-      `${admin ? "/api/admin/problem-reports" : "/api/problem-reports"}?offset=${offset}&limit=25`,
-    );
+    [filter, setFilter] = useState("all"),
+    [message, setMessage] = useState("");
+  const data = useRemote<{
+    total: number;
+    retentionDays: number;
+    items: {
+      id: string;
+      createdMs: number;
+      acknowledgedMs: number | null;
+      summary: Summary;
+      context?: {
+        channelName: string;
+        profileName: string;
+        accountName: string;
+        title: string;
+      };
+    }[];
+  }>(
+    `${admin ? "/api/admin/problem-reports" : "/api/problem-reports"}?offset=${offset}&limit=25&status=${filter}`,
+    0,
+    true,
+  );
+  useEffect(() => {
+    if (data.data && offset && offset >= data.data.total)
+      setOffset(Math.max(0, Math.floor((data.data.total - 1) / 25) * 25));
+  }, [data.data?.total, offset]);
   return (
     <>
       <header className="page-head">
         <div>
           <h1>{admin ? "Playback problem reports" : "Your problem reports"}</h1>
           <p>
-            Explicit viewer submissions. Reports contain no media or diagnostic
-            logs.
+            Reports are sent explicitly from the player’s Report a problem
+            action.
           </p>
         </div>
-        <button className="secondary" onClick={data.reload}>
+        <button
+          className="secondary"
+          disabled={data.loading}
+          onClick={data.reload}
+        >
           Refresh reports
         </button>
       </header>
+      <div className="tabs" aria-label="Report status">
+        {["all", "new", "acknowledged"].map((status) => (
+          <button
+            key={status}
+            className={filter === status ? "selected" : "secondary"}
+            aria-pressed={filter === status}
+            onClick={() => {
+              setFilter(status);
+              setOffset(0);
+            }}
+          >
+            {status[0]!.toUpperCase() + status.slice(1)}
+          </button>
+        ))}
+      </div>
       <Load {...data} retry={data.reload} />
-      {data.data && (
-        <p>
-          Retention: {data.data.retentionDays} days · {data.data.total}{" "}
-          permitted reports
+      {message && (
+        <p role="status" className="notice">
+          {message}
         </p>
       )}
-      {data.data?.items.length === 0 && <Empty title="No reports" />}
-      {data.data?.items.map((r) => (
-        <article className="panel" key={r.id}>
-          <h2>
-            {r.summary.category} · {r.acknowledgedMs ? "Acknowledged" : "New"}
-          </h2>
-          <p>
-            Reference {r.id} · Sent {new Date(r.createdMs).toLocaleString()}
-          </p>
-          <ReportDetails summary={r.summary} />
-          {admin && (
-            <div className="actions">
-              <Action
-                secondary
-                disabled={Boolean(r.acknowledgedMs)}
-                task={async () => {
-                  await api(`/api/admin/problem-reports/${r.id}`, "PATCH", {
-                    acknowledged: true,
-                  });
-                  data.reload();
-                }}
-              >
-                Acknowledge report
-              </Action>
-              <Action
-                danger
-                task={async () => {
-                  if (
-                    window.confirm("Permanently delete this problem report?")
-                  ) {
-                    await api(`/api/admin/problem-reports/${r.id}`, "DELETE");
-                    data.reload();
-                  }
-                }}
-              >
-                Delete report
-              </Action>
+      {data.data && (
+        <p>
+          Kept for {data.data.retentionDays} days · {data.data.total} permitted
+          reports
+        </p>
+      )}
+      {data.data?.items.length === 0 && (
+        <Empty
+          title={
+            filter === "all" ? "No reports" : "No reports with this status"
+          }
+        >
+          <a href="#watch">Open Watch TV</a>, choose a channel, then use Report
+          a problem to review and send a report.
+        </Empty>
+      )}
+      <div className="stack">
+        {data.data?.items.map((report) => (
+          <article className="panel" key={report.id}>
+            <div className="section-head">
+              <h2>
+                {report.summary.category[0]!.toUpperCase() +
+                  report.summary.category.slice(1)}{" "}
+                · {report.context?.channelName ?? "Playback report"}
+              </h2>
+              <span className="badge">
+                {report.acknowledgedMs ? "Acknowledged" : "New"}
+              </span>
             </div>
-          )}
-        </article>
-      ))}
+            <p>
+              {new Date(report.createdMs).toLocaleString()} ·{" "}
+              {report.context?.profileName ?? "Profile"}
+              {admin ? ` · ${report.context?.accountName ?? "Account"}` : ""}
+            </p>
+            <p>{report.context?.title ?? ""}</p>
+            <details>
+              <summary>Report reference and technical details</summary>
+              <p>Reference {report.id}</p>
+              <ReportDetails summary={report.summary} />
+            </details>
+            {admin && (
+              <div className="actions">
+                <Action
+                  secondary
+                  disabled={Boolean(report.acknowledgedMs)}
+                  label={`Acknowledge ${report.summary.category} report from ${new Date(report.createdMs).toLocaleString()}`}
+                  task={async () => {
+                    await api(
+                      `/api/admin/problem-reports/${report.id}`,
+                      "PATCH",
+                      { acknowledged: true },
+                    );
+                    setMessage("Report acknowledged.");
+                    data.reload();
+                  }}
+                >
+                  Acknowledge
+                </Action>
+                <Action
+                  secondary
+                  danger
+                  label={`Delete ${report.summary.category} report from ${new Date(report.createdMs).toLocaleString()}`}
+                  task={async () => {
+                    if (
+                      !(await confirmAction(
+                        `Permanently delete the ${report.summary.category} report sent ${new Date(report.createdMs).toLocaleString()}? This cannot be undone. Reference: ${report.id}`,
+                        {
+                          title: "Delete this report?",
+                          label: "Delete report",
+                        },
+                      ))
+                    )
+                      return;
+                    await api(
+                      `/api/admin/problem-reports/${report.id}`,
+                      "DELETE",
+                    );
+                    setMessage("Report deleted.");
+                    data.reload();
+                  }}
+                >
+                  Delete report
+                </Action>
+              </div>
+            )}
+          </article>
+        ))}
+      </div>
       <div className="actions">
         <button
           className="secondary"
-          disabled={offset === 0}
-          onClick={() => setOffset((v) => Math.max(0, v - 25))}
+          disabled={!offset || data.loading}
+          onClick={() => setOffset((n) => Math.max(0, n - 25))}
         >
           Previous reports
         </button>
         <button
-          disabled={!data.data || offset + 25 >= data.data.total}
-          onClick={() => setOffset((v) => v + 25)}
+          className="secondary"
+          disabled={
+            !data.data || offset + 25 >= data.data.total || data.loading
+          }
+          onClick={() => setOffset((n) => n + 25)}
         >
           Next reports
         </button>

@@ -1,0 +1,61 @@
+(node:53357) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ successful fresh reset preserves independent videos, sidecars, neighbors, outputs and prior backups (125.588625ms)
+✔ successful metadata reset preserves independent videos, sidecars, neighbors, outputs and prior backups (104.552292ms)
+✔ successful custom reset preserves independent videos, sidecars, neighbors, outputs and prior backups (103.197542ms)
+✔ successful catalog reset preserves independent videos, sidecars, neighbors, outputs and prior backups (116.651708ms)
+✔ successful sources reset preserves independent videos, sidecars, neighbors, outputs and prior backups (102.847416ms)
+✔ successful collections reset preserves independent videos, sidecars, neighbors, outputs and prior backups (101.999792ms)
+✔ successful channels reset preserves independent videos, sidecars, neighbors, outputs and prior backups (99.662541ms)
+✔ successful activity reset preserves independent videos, sidecars, neighbors, outputs and prior backups (100.133083ms)
+✔ successful accounts reset preserves independent videos, sidecars, neighbors, outputs and prior backups (100.005625ms)
+✔ preexisting unrelated mytuner.db-wal survives offline refusal byte/type/inode-identical (20.140708ms)
+✔ preexisting unrelated mytuner.db-shm survives offline refusal byte/type/inode-identical (19.588625ms)
+✔ preexisting unrelated mytuner.db-journal survives offline refusal byte/type/inode-identical (21.13325ms)
+✔ preexisting unrelated runtime-lock.db-wal survives offline refusal byte/type/inode-identical (19.686292ms)
+✔ preexisting unrelated runtime-lock.db-shm survives offline refusal byte/type/inode-identical (20.104458ms)
+✔ preexisting unrelated runtime-lock.db-journal survives offline refusal byte/type/inode-identical (19.353334ms)
+✔ mytuner.db symlink to synthetic video is refused without modifying either path (20.913417ms)
+✔ mytuner.db hardlink to synthetic video is refused without modifying either path (22.671125ms)
+✔ runtime-lock.db symlink to synthetic video is refused without modifying either path (20.34975ms)
+✔ runtime-lock.db hardlink to synthetic video is refused without modifying either path (20.417583ms)
+✔ integration.key symlink to synthetic video is refused without modifying either path (20.8025ms)
+✔ integration.key hardlink to synthetic video is refused without modifying either path (20.774125ms)
+✔ late foreign mytuner.db-wal survives rejected execution and SQLite close (96.054625ms)
+✔ late foreign mytuner.db-shm survives rejected execution and SQLite close (90.873583ms)
+✔ late foreign mytuner.db-journal survives rejected execution and SQLite close (93.9495ms)
+✔ late foreign runtime-lock.db-wal survives rejected execution and SQLite close (89.867417ms)
+✔ late foreign runtime-lock.db-shm survives rejected execution and SQLite close (92.362458ms)
+✔ late foreign runtime-lock.db-journal survives rejected execution and SQLite close (90.751042ms)
+✔ late mytuner.db regular replacement survives reset refusal and handle close (92.26075ms)
+✔ late mytuner.db symlink replacement survives reset refusal and handle close (100.161208ms)
+✔ late mytuner.db hardlink replacement survives reset refusal and handle close (90.770125ms)
+✔ late runtime-lock.db regular replacement survives reset refusal and handle close (91.409166ms)
+✔ late runtime-lock.db symlink replacement survives reset refusal and handle close (104.079375ms)
+✔ late runtime-lock.db hardlink replacement survives reset refusal and handle close (96.94425ms)
+✔ foreign newly allocated backup-wal is not deleted by a failed VACUUM or immutable inspection (28.156292ms)
+✔ foreign newly allocated backup-shm is not deleted by a failed VACUUM or immutable inspection (25.453375ms)
+✔ foreign newly allocated backup-journal is not deleted by a failed VACUUM or immutable inspection (25.938666ms)
+✔ allocated backup target symlink replacement cannot redirect VACUUM (27.23525ms)
+✔ allocated backup target hardlink replacement cannot redirect VACUUM (26.954125ms)
+✔ allocated backup target regular replacement cannot redirect VACUUM (27.912959ms)
+{"round2ManifestRace":{"injected":true,"wroteToReadOnlySource":false,"resetSucceeded":false,"mediaRowsAfter":1,"advertisedDatabaseExists":false,"error":"Reset backup directory changed","advertised":"/private/var/folders/yy/7g1n48s13fxdt6c6dg20xvkr0000gn/T/mytuner-reset-r2-filesystem-aPD2fZ/40-normal/appdata/backups/reset-snapshot-2026-11-27T08-13-45.068Z-b7b31d9c-2030-4ed6-942b-192a7563abba","base":"/private/var/folders/yy/7g1n48s13fxdt6c6dg20xvkr0000gn/T/mytuner-reset-r2-filesystem-aPD2fZ/40-normal"}}
+✔ final manifest open cannot follow a backup-bundle directory swapped to a read-only source (88.56025ms)
+✔ quoted, query-like, percent, Unicode and newline data directory remains URL-safe (96.967209ms)
+✔ backup root symlink is rejected without touching source videos (21.882084ms)
+✔ backup root shared-mode is rejected without touching source videos (24.001416ms)
+✔ data directory symlink is rejected before a SQLite handle mutates neighboring files (22.526834ms)
+✔ late WAL header edit on mytuner.db does not let close remove foreign video sidecars (93.648292ms)
+✔ late WAL header edit on runtime-lock.db does not let close remove foreign video sidecars (91.643333ms)
+✔ source symlink authority retains both historical canonical and configured roots across restart (97.653417ms)
+{"round2KeyRace":{"injected":true,"wroteToReadOnlySource":false,"resetSucceeded":false,"error":"Reset backup directory changed","base":"/private/var/folders/yy/7g1n48s13fxdt6c6dg20xvkr0000gn/T/mytuner-reset-r2-filesystem-aPD2fZ/48-normal"}}
+ROUND2_SYNTHETIC_FIXTURES=/private/var/folders/yy/7g1n48s13fxdt6c6dg20xvkr0000gn/T/mytuner-reset-r2-filesystem-aPD2fZ
+✔ backup integration-key append cannot follow bundle swap into read-only source (86.355667ms)
+ℹ tests 48
+ℹ suites 0
+ℹ pass 48
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3407.524708

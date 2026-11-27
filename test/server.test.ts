@@ -1,4 +1,5 @@
 import test from "node:test";
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -730,7 +731,11 @@ test("HTTP journey selects library content, manages collections, publishes progr
     method: "POST",
     url: `/api/profiles/${f.p}/collections`,
     headers,
-    payload: { name: "Favorites", mediaIds: [f.item.id] },
+    payload: {
+      creationId: randomUUID(),
+      name: "Favorites",
+      mediaIds: [f.item.id],
+    },
   });
   assert.equal(saved.statusCode, 201);
   const collectionId = saved.json().id;

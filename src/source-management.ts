@@ -5,6 +5,7 @@ import { invariant } from "./domain.js";
 import { sourceById } from "./security.js";
 import { resolve } from "node:path";
 import { canonicalPath, containsPath } from "./catalog.js";
+import { sourceDetails } from "./source-configuration.js";
 
 function assertIdle(store: Store, id: string, busy: () => boolean) {
   invariant(
@@ -80,6 +81,8 @@ export async function editSource(
   store: Store,
   id: string,
   input: {
+    revision: string;
+    resetConfirmed?: boolean | undefined;
     name?: string | undefined;
     root?: string | undefined;
     kind?: Source["kind"] | undefined;
@@ -89,7 +92,13 @@ export async function editSource(
   authorize: () => void,
   busy: () => boolean,
 ) {
-  const before = sourceById(store, id);
+  authorize();
+  const before = sourceDetails(store, id);
+  invariant(
+    input.revision === before.revision,
+    409,
+    "Source changed elsewhere; load its saved details before saving",
+  );
   assertIdle(store, id, busy);
   const changedRoot =
     input.root !== undefined && resolve(input.root) !== before.root_path;
@@ -124,16 +133,22 @@ export async function editSource(
   );
   authorize();
   assertIdle(store, id, busy);
-  invariant(
-    JSON.stringify(sourceById(store, id)) === JSON.stringify(before),
-    409,
-    "Source changed elsewhere; reopen its details before saving",
-  );
   const reset =
     root !== before.root_path ||
     (input.kind !== undefined && input.kind !== before.kind);
-  if (reset) assertUnused(store, id);
   store.transaction(() => {
+    invariant(
+      sourceDetails(store, id).revision === input.revision,
+      409,
+      "Source changed elsewhere; load its saved details before saving",
+    );
+    assertIdle(store, id, busy);
+    invariant(
+      !reset || input.resetConfirmed === true,
+      400,
+      "Confirm the catalog and access reset before changing the source directory or type",
+    );
+    if (reset) assertUnused(store, id);
     if (reset) clearCatalog(store, id);
     store.db
       .prepare(
@@ -153,5 +168,5 @@ export async function editSource(
         )
         .run(id);
   });
-  return { ...sourceById(store, id), catalogReset: reset };
+  return { ...sourceDetails(store, id), catalogReset: reset };
 }

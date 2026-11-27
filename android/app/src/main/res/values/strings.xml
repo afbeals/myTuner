@@ -1,1 +1,11 @@
-<resources><string name="connecting">Connecting…</string><string name="joining">Joining your channel…</string><string name="unavailable">This scheduled video is unavailable. The channel continues at the next interval.</string></resources>
+<resources>
+    <string name="connecting">Connecting to %1$s…</string>
+    <string name="joining">Joining your channel…</string>
+    <string name="unavailable">This scheduled video is unavailable. The channel continues at the next interval.</string>
+    <string name="guide_window">%1$s – %2$s · %3$s</string>
+    <string name="guide_window_current">Current window</string>
+    <plurals name="guide_window_ahead">
+        <item quantity="one">%1$d minute ahead</item>
+        <item quantity="other">%1$d minutes ahead</item>
+    </plurals>
+</resources>

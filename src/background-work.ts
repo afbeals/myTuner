@@ -2,6 +2,7 @@ import { DomainError, invariant } from "./domain.js";
 
 interface Waiting {
   kind: string;
+  key?: string | undefined;
   signal: AbortSignal | undefined;
   start: () => void;
   reject: (error: unknown) => void;
@@ -11,6 +12,8 @@ interface Waiting {
 /** One optional filesystem workload at a time. Running encoders finish their task. */
 export class BackgroundWork {
   private active: string | null = null;
+  private activeTask: { key: string | undefined; paused: boolean } | null =
+    null;
   private waiting: Waiting[] = [];
   private paused = false;
   private admitted = 0;
@@ -27,6 +30,22 @@ export class BackgroundWork {
       completed: this.completed,
     };
   }
+  status(key: string): {
+    admission: "waiting" | "active" | null;
+    waitingReason: "playback" | "queue" | null;
+  } {
+    if (this.activeTask?.key === key)
+      return {
+        admission: this.activeTask.paused ? "waiting" : "active",
+        waitingReason: this.activeTask.paused ? "playback" : null,
+      };
+    if (this.waiting.some((task) => task.key === key))
+      return {
+        admission: "waiting",
+        waitingReason: this.paused ? "playback" : "queue",
+      };
+    return { admission: null, waitingReason: null };
+  }
   setPaused(paused: boolean) {
     this.paused = paused;
     if (!paused) {
@@ -38,6 +57,7 @@ export class BackgroundWork {
     signal?.throwIfAborted();
     invariant(!this.stopped, 503, "Background work is stopping");
     while (this.paused) {
+      if (this.activeTask) this.activeTask.paused = true;
       await new Promise<void>((resolve, reject) => {
         const resume = () => {
           this.resumes.delete(resume);
@@ -57,12 +77,14 @@ export class BackgroundWork {
       });
       signal?.throwIfAborted();
     }
+    if (this.activeTask) this.activeTask.paused = false;
     invariant(!this.stopped, 503, "Background work is stopping");
   }
   async run<T>(
     kind: string,
     signal: AbortSignal | undefined,
     work: (checkpoint: () => Promise<void>) => Promise<T>,
+    key?: string,
   ): Promise<T> {
     signal?.throwIfAborted();
     invariant(!this.stopped, 503, "Background work is stopping");
@@ -74,11 +96,13 @@ export class BackgroundWork {
     await new Promise<void>((resolve, reject) => {
       const waiter: Waiting = {
         kind,
+        key,
         signal,
         reject,
         abort: () => {},
         start: () => {
           this.active = kind;
+          this.activeTask = { key, paused: false };
           this.admitted++;
           resolve();
         },
@@ -98,6 +122,7 @@ export class BackgroundWork {
       return await work(() => this.checkpoint(signal));
     } finally {
       this.active = null;
+      this.activeTask = null;
       this.completed++;
       this.pump();
     }

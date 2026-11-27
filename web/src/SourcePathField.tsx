@@ -1,7 +1,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { api } from "./api";
-import { Field, Select, Load, useMarkFormDirty, useRemote } from "./ui";
-
+import {
+  Field,
+  Select,
+  Load,
+  useMarkFormDirty,
+  useRemote,
+  ErrorBox,
+} from "./ui";
+import { DirectoryTree, type DirectoryPage } from "./DirectoryTree";
+import { Info } from "./Info";
 interface DirectoryCheck {
   status: string;
   exists: boolean | null;
@@ -22,7 +30,6 @@ interface Suggestions {
   error: string | null;
   items: { path: string; access: string; type: string; origin: string }[];
 }
-// Suggestions describe mount targets only. Opening or filtering never browses media.
 export function SourcePathField({
   label,
   name,
@@ -47,48 +54,48 @@ export function SourcePathField({
   required?: boolean;
 }) {
   const id = useId(),
-    markDirty = useMarkFormDirty();
-  const [draft, setDraft] = useState(defaultValue),
+    markDirty = useMarkFormDirty(),
+    [draft, setDraft] = useState(defaultValue),
     [open, setOpen] = useState(false),
-    [search, setSearch] = useState("");
-  const [scope, setScope] = useState("configured"),
+    [browse, setBrowse] = useState<string | null>(null),
+    [scope, setScope] = useState("configured"),
     [checking, setChecking] = useState(false),
     [checked, setChecked] = useState<DirectoryCheck | null>(null),
-    [checkError, setCheckError] = useState("");
-  const pending = useRef<AbortController | null>(null),
-    generation = useRef(0);
-  const current = value ?? draft;
-  const identity = JSON.stringify([current, purpose, sourceId, scope]);
-  const latest = useRef(identity);
+    [error, setError] = useState<unknown>(null),
+    [search, setSearch] = useState("");
+  const current = value ?? draft,
+    serial = useRef(0),
+    controller = useRef<AbortController | null>(null);
+  const identity = JSON.stringify([current, purpose, sourceId, scope]),
+    latest = useRef(identity);
   latest.current = identity;
-  const resetCheck = () => {
-    generation.current++;
-    pending.current?.abort();
-    pending.current = null;
+  const reset = () => {
+    serial.current++;
+    controller.current?.abort();
+    controller.current = null;
     setChecking(false);
     setChecked(null);
-    setCheckError("");
+    setError(null);
   };
   useEffect(() => {
-    resetCheck();
+    reset();
     return () => {
-      generation.current++;
-      pending.current?.abort();
+      serial.current++;
+      controller.current?.abort();
     };
   }, [identity]);
   useEffect(() => {
-    if (purpose !== "source" || scope !== "configured") return;
-    const form = document.getElementById(id)?.closest("form");
-    const changed = (event: Event) => {
-      if (
-        event.target instanceof HTMLInputElement &&
-        event.target.name === "recursive"
-      )
-        resetCheck();
-    };
+    const form = document.getElementById(id)?.closest("form"),
+      changed = (event: Event) => {
+        if (
+          event.target instanceof HTMLInputElement &&
+          event.target.name === "recursive"
+        )
+          reset();
+      };
     form?.addEventListener("change", changed);
     return () => form?.removeEventListener("change", changed);
-  }, [id, purpose, scope]);
+  }, [id]);
   const recursiveScope = () =>
     scope === "bounded" ||
     (scope === "configured" &&
@@ -99,12 +106,12 @@ export function SourcePathField({
           ?.querySelector<HTMLInputElement>('input[name="recursive"]')
           ?.checked ??
           true)));
-  const checkDirectory = async () => {
-    resetCheck();
-    const controller = new AbortController(),
-      revision = generation.current,
+  const check = async () => {
+    reset();
+    const ticket = serial.current,
+      abort = new AbortController(),
       recursive = recursiveScope();
-    pending.current = controller;
+    controller.current = abort;
     setChecking(true);
     try {
       const result = await api<DirectoryCheck>(
@@ -116,55 +123,43 @@ export function SourcePathField({
           ...(sourceId ? { sourceId } : {}),
           recursive,
         },
-        controller.signal,
+        abort.signal,
       );
       if (
-        !controller.signal.aborted &&
-        revision === generation.current &&
+        !abort.signal.aborted &&
+        ticket === serial.current &&
         latest.current === identity &&
         recursiveScope() === recursive
       )
         setChecked(result);
     } catch (error) {
-      if (
-        !controller.signal.aborted &&
-        revision === generation.current &&
-        latest.current === identity
-      )
-        setCheckError(
-          error instanceof Error
-            ? error.message
-            : "Directory check failed. Try again.",
-        );
+      if (!abort.signal.aborted && ticket === serial.current) setError(error);
     } finally {
-      if (revision === generation.current) {
+      if (ticket === serial.current) {
         setChecking(false);
-        pending.current = null;
+        controller.current = null;
       }
     }
   };
   const params = new URLSearchParams({
-    purpose,
-    ...(sourceId ? { sourceId } : {}),
-  });
-  const choices = useRemote<Suggestions>(
-    open ? `/api/admin/setup/path-suggestions?${params}` : null,
-  );
+      purpose,
+      ...(sourceId ? { sourceId } : {}),
+    }),
+    choices = useRemote<Suggestions>(
+      open ? `/api/admin/setup/path-suggestions?${params}` : null,
+    );
   const change = (next: string) => {
-    resetCheck();
+    reset();
     setDraft(next);
     onChange?.(next);
   };
   const choose = (next: string) => {
-    if (current !== next) markDirty();
+    if (next !== current) markDirty();
     change(next);
     setOpen(false);
+    setBrowse(null);
     document.getElementById(id)?.focus();
   };
-  const filtered =
-    choices.data?.items.filter((item) =>
-      item.path.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
   return (
     <div className="directory-field">
       <Field
@@ -174,140 +169,125 @@ export function SourcePathField({
         value={current}
         onChange={(event) => change(event.target.value)}
         required={required}
-        {...(hint ? { hint } : {})}
         {...(placeholder ? { placeholder } : {})}
+        {...(hint ? { hint } : {})}
       />
-      <button
-        type="button"
-        className="secondary"
-        aria-expanded={open}
-        aria-controls={`${id}-paths`}
-        onClick={() => setOpen((old) => !old)}
-      >
-        {open
-          ? "Hide directory choices"
-          : `Choose ${purpose === "source" ? "media" : purpose} directory`}
-      </button>
       <div className="actions">
         <button
           type="button"
           className="secondary"
-          onClick={() => void checkDirectory()}
+          aria-expanded={open}
+          aria-controls={`${id}-choices`}
+          onClick={() => setOpen((old) => !old)}
+        >
+          {open
+            ? "Hide directory choices"
+            : `Choose ${purpose === "source" ? "media" : purpose} directory`}
+        </button>
+        <button
+          type="button"
+          className="secondary"
           disabled={
             checking || (!current && (purpose === "source" || !sourceId))
           }
-          aria-describedby={`${id}-check-hint`}
+          onClick={() => void check()}
         >
-          {checking ? "Checking directory…" : "Check directory"}
+          {checking ? "Checking…" : "Check directory"}
         </button>
         {checking && (
-          <button type="button" className="secondary" onClick={resetCheck}>
-            Cancel directory check
+          <button type="button" className="secondary" onClick={reset}>
+            Cancel check
           </button>
         )}
+        <Info title="Directory selection">
+          Choose a directory mounted into MyTuner. The application sees
+          container paths such as /tv. Host paths and other containers’ mappings
+          cannot be read here. Opening a folder lists only its direct children;
+          Check directory samples file names without inspecting videos.
+        </Info>
       </div>
-      <Select
-        label="Directory check scope"
-        value={scope}
-        onChange={(event) => {
-          event.stopPropagation();
-          resetCheck();
-          setScope(event.target.value);
-        }}
-      >
-        <option value="configured">
-          {purpose === "source"
-            ? "Use source subfolder setting"
-            : "Standard sample (two levels)"}
-        </option>
-        <option value="shallow">This directory only</option>
-        <option value="bounded">Include subfolders (two levels)</option>
-      </Select>
-      <p id={`${id}-check-hint`}>
-        Checks only when requested, stopping after five supported file names or
-        256 entries. No video inspection or source scan is started.
-        {purpose !== "source" &&
-          !current &&
-          " Blank checks beside this source’s videos."}
-      </p>
-      {checking && (
-        <p role="status">
-          Checking the directory. You can keep editing or cancel.
-        </p>
-      )}
-      {checkError && <p role="alert">{checkError}</p>}
-      {checked && (
-        <section
-          className="notice directory-check"
-          aria-label={`${label} directory check`}
-          aria-live="polite"
-        >
-          <p>{checked.message}</p>
-          {checked.canonicalPath && (
-            <p>
-              Container directory: <code>{checked.canonicalPath}</code>
-            </p>
-          )}
-          {checked.readableDirectory === true && (
-            <p>Directory exists and is readable.</p>
-          )}
-          {checked.readableDirectory === true && (
-            <p>
-              {checked.complete
-                ? "Checked area completed."
-                : "Partial check; other files may exist."}{" "}
-              {checked.examinedEntries} entries in {checked.examinedDirectories}{" "}
-              directories.{" "}
-              {checked.maxDepth
-                ? "Up to two subfolder levels."
-                : "This directory only."}
-            </p>
-          )}
-          {checked.samples.length > 0 && (
-            <>
-              <p>
-                File name samples (
-                {purpose === "source"
-                  ? "supported video extensions; playback not verified"
-                  : purpose === "metadata"
-                    ? "NFO files"
-                    : "caption files"}
-                ):
-              </p>
-              <ul>
-                {checked.samples.map((sample) => (
-                  <li key={sample}>
-                    <code>{sample}</code>
-                  </li>
-                ))}
-              </ul>
-              <p>
-                {Object.entries(checked.extensions)
-                  .map(([extension, count]) => `${extension}: ${count}`)
-                  .join(" · ")}{" "}
-                in the checked sample.
-              </p>
-            </>
-          )}
-        </section>
-      )}
       {open && (
         <section
-          id={`${id}-paths`}
+          id={`${id}-choices`}
           className="directory-choices"
           aria-label={`${label} choices`}
+          onChange={(event) => event.stopPropagation()}
         >
-          <p>
-            Server-visible mount targets. Directory contents are not searched.
-            Availability is checked when you save.
-          </p>
           <Load {...choices} retry={choices.reload} />
           {choices.data?.error && <p role="status">{choices.data.error}</p>}
           {choices.data && !choices.data.supported && (
             <p>
-              Mount suggestions are unavailable on this platform. Enter the
-              server-visible directory above.
+              Automatic mount choices are available in the Linux container. You
+              can enter a path above and check it.
             </p>
+          )}
+          <Field
+            label={`Filter ${purpose} mounts`}
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.preventDefault();
+            }}
+          />
+          <div className="directory-options">
+            {choices.data?.items
+              .filter((item) =>
+                item.path.toLowerCase().includes(search.toLowerCase()),
+              )
+              .map((item) => (
+                <div className="compact-row" key={item.path}>
+                  <span>
+                    <code>{item.path}</code>
+                    <small>
+                      {item.access === "read-only"
+                        ? "Read-only mount"
+                        : item.access === "read-write"
+                          ? "Writable mount · map original media as read-only"
+                          : "Access not checked"}
+                    </small>
+                  </span>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-label={`Use directory ${item.path}`}
+                      onClick={() => choose(item.path)}
+                    >
+                      Use
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      aria-label={`Browse directory ${item.path}`}
+                      onClick={() => setBrowse(item.path)}
+                    >
+                      Browse
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </div>
+          {choices.data?.supported &&
+            !choices.loading &&
+            !choices.error &&
+            !choices.data.error &&
+            !choices.data.items.some((item) =>
+              item.path.toLowerCase().includes(search.toLowerCase()),
+            ) && (
+              <p>
+                {search
+                  ? "No mount paths match this filter. Clear the filter or enter a path above."
+                  : "No unused media mounts found. Your current or manually entered path is kept."}
+              </p>
+            )}
+          {current && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setBrowse(current)}
+            >
+              Browse current directory
+            </button>
           )}
           {purpose !== "source" && (
             <button
@@ -315,44 +295,93 @@ export function SourcePathField({
               className="secondary"
               onClick={() => choose("")}
             >
-              Beside videos (default)
+              Use files beside videos
             </button>
           )}
-          {choices.data && (
-            <>
-              <Field
-                label={`Find ${purpose} directory choice`}
-                value={search}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.preventDefault();
-                }}
-                onChange={(event) => {
-                  event.stopPropagation();
-                  setSearch(event.target.value);
-                }}
-              />
-              <ul className="directory-options">
-                {filtered.map((item) => (
-                  <li key={item.path}>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => choose(item.path)}
-                    >
-                      {item.path} · {item.access} · not checked
-                    </button>
+        </section>
+      )}
+      <details
+        className="directory-check-options"
+        onChange={(event) => event.stopPropagation()}
+      >
+        <summary>Directory check options</summary>
+        <Select
+          label="Directory check scope"
+          value={scope}
+          onChange={(event) => setScope(event.target.value)}
+        >
+          <option value="configured">
+            {purpose === "source"
+              ? "Use source subfolder setting"
+              : "Standard sample (two levels)"}
+          </option>
+          <option value="shallow">This directory only</option>
+          <option value="bounded">Include subfolders (two levels)</option>
+        </Select>
+        <p>
+          Stops after five supported file names or 256 entries. No video
+          inspection or full scan is started.
+        </p>
+      </details>
+      <ErrorBox error={error} />
+      {checking && <p role="status">Checking directory…</p>}
+      {checked && (
+        <section
+          className="notice directory-check"
+          aria-label={`${label} directory check`}
+          aria-live="polite"
+        >
+          <p>{checked.message}</p>
+          {checked.canonicalPath && <code>{checked.canonicalPath}</code>}
+          {checked.readableDirectory === true && (
+            <p>
+              Directory exists and is readable.{" "}
+              {checked.complete
+                ? "Sample check complete."
+                : "Partial sample; more files may exist."}
+            </p>
+          )}
+          {checked.samples.length > 0 && (
+            <details>
+              <summary>
+                {checked.samples.length} supported file names found
+              </summary>
+              <ul>
+                {checked.samples.map((sample) => (
+                  <li key={sample}>
+                    <code>{sample}</code>
                   </li>
                 ))}
               </ul>
-              {!filtered.length && (
-                <p>
-                  No matching mount suggestions. Your saved or manually entered
-                  path is kept.
-                </p>
-              )}
-            </>
+            </details>
           )}
         </section>
+      )}
+      {browse !== null && (
+        <DirectoryTree
+          identity={`${sourceId ?? "new"}:${purpose}:${browse}`}
+          title="Choose a directory"
+          rootLabel={browse}
+          rootChoiceLabel="This directory"
+          emptyLabel="No subfolders in this page"
+          initial={[""]}
+          load={(parent, offset, signal) =>
+            api<DirectoryPage>(
+              `/api/admin/setup/directories?${new URLSearchParams({ root: browse, parent, offset: String(offset), purpose, ...(sourceId ? { sourceId } : {}) })}`,
+              "GET",
+              undefined,
+              signal,
+            )
+          }
+          onApply={(paths) =>
+            choose(
+              [browse.replace(/\/+$/, ""), paths[0]]
+                .filter(Boolean)
+                .join("/") || "/",
+            )
+          }
+          onClose={() => setBrowse(null)}
+        />
       )}
     </div>
   );

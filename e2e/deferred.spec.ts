@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8791" });
@@ -8,6 +9,7 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -152,7 +154,7 @@ test("R8-03 unchanged uncertain report retries once; a changed review sends a se
   ).toEqual(["picture", "picture", "sound"]);
 });
 for (const failure of [false, true]) {
-  test(`R8-03 late ${failure ? "failed" : "successful"} preview cannot replace a newer report category`, async ({
+  test(`R8-03 pending ${failure ? "failed" : "successful"} preview locks category; the next review starts clean`, async ({
     page,
   }) => {
     const dialog = await report(page);
@@ -176,11 +178,19 @@ for (const failure of [false, true]) {
       .getByRole("button", { name: "Review summary", exact: true })
       .click();
     await expect.poll(() => held).toBe(1);
-    await dialog.getByLabel("Problem category").selectOption("captions");
-    release();
+    await expect(dialog.getByLabel("Problem category")).toBeDisabled();
     await expect(
-      dialog.getByRole("button", { name: "Review summary", exact: true }),
-    ).toBeEnabled();
+      dialog.getByRole("button", { name: "Close dialog", exact: true }),
+    ).toBeDisabled();
+    release();
+    await expect(dialog.getByLabel("Problem category")).toBeEnabled();
+    if (failure)
+      await expect(dialog.getByRole("alert")).toContainText(
+        "Obsolete preview failure",
+      );
+    else
+      await expect(dialog.locator(".report-summary")).toContainText("picture");
+    await dialog.getByLabel("Problem category").selectOption("captions");
     await expect(dialog.getByRole("alert")).toHaveCount(0);
     await expect(
       dialog.getByRole("button", { name: "Send report", exact: true }),
@@ -201,10 +211,11 @@ for (const failure of [false, true]) {
     ).toBeFocused();
   });
 }
-test("R8-03 late successful send cannot close a changed review or reuse its identity", async ({
+test("R8-03 pending send locks the reviewed category; the next report uses a separate identity", async ({
   page,
 }) => {
-  const dialog = await report(page);
+  const dialog = await report(page),
+    before = new Set((await inbox(page)).map((item) => item.id));
   await dialog
     .getByRole("button", { name: "Review summary", exact: true })
     .click();
@@ -223,16 +234,33 @@ test("R8-03 late successful send cannot close a changed review or reuse its iden
     .getByRole("button", { name: "Send report", exact: true })
     .click();
   await expect.poll(() => held).toBe(1);
+  await expect(dialog.getByLabel("Problem category")).toBeDisabled();
+  await expect(
+    dialog.getByRole("button", { name: "Close dialog", exact: true }),
+  ).toBeDisabled();
+  release();
+  await expect(dialog.getByRole("status")).toContainText("Report sent");
+  await dialog
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Report a problem", exact: true })
+    .click();
+  await expect(dialog.getByRole("status")).toHaveCount(0);
   await dialog.getByLabel("Problem category").selectOption("other");
   await dialog
     .getByRole("button", { name: "Review summary", exact: true })
     .click();
   await expect(dialog.locator(".report-summary")).toContainText("other");
-  release();
-  await expect(dialog.getByRole("status")).toHaveCount(0);
   await dialog
     .getByRole("button", { name: "Send report", exact: true })
     .click();
   await expect(dialog.getByRole("status")).toContainText("Report sent");
   expect(ids[0]).not.toBe(ids[1]);
+  expect(
+    (await inbox(page))
+      .filter((item) => !before.has(item.id))
+      .map((item) => item.summary.category)
+      .sort(),
+  ).toEqual(["other", "picture"]);
 });

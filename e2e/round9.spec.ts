@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import type { Source, Programming } from "../web/src/types";
@@ -41,7 +42,10 @@ async function fixture(page: Page, name: string) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await selectInitialProfile(page);
+  await expect(
+    page.getByRole("navigation", { name: "Main navigation", exact: true }),
+  ).toBeAttached();
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -125,26 +129,57 @@ async function frozenPicture(page: Page) {
       const context = canvas.getContext("2d")!;
       context.drawImage(poster, 0, 0, canvas.width, canvas.height);
       const expected = context.getImageData(
-        Math.floor(canvas.width / 2),
-        Math.floor(canvas.height / 4),
-        1,
-        1,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
       ).data;
       context.drawImage(actual, 0, 0);
-      const seen = context.getImageData(
-        Math.floor(canvas.width / 2),
-        Math.floor(canvas.height / 4),
-        1,
-        1,
-      ).data;
-      return { expected: [...expected], seen: [...seen] };
+      const seen = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      // Fractional CSS sizes round outward in element screenshots (for example,
+      // 841.33 CSS px becomes 842 bitmap px). A single color-boundary pixel is
+      // not stable under the browser's and canvas's different interpolation.
+      // Compare a uniform grid across the actual picture instead, retaining
+      // the same per-channel tolerance and an explicit nonblack requirement.
+      const error = [0, 0, 0],
+        brightness = [0, 0, 0];
+      let samples = 0;
+      for (let row = 0; row < 14; row++) {
+        for (let column = 0; column < 24; column++) {
+          const x = Math.floor(((column + 0.5) / 24) * canvas.width);
+          const y = Math.floor(((row + 0.5) / 14) * canvas.height);
+          const offset = (y * canvas.width + x) * 4;
+          for (let channel = 0; channel < 3; channel++) {
+            error[channel]! += Math.abs(
+              expected[offset + channel]! - seen[offset + channel]!,
+            );
+            brightness[channel]! += expected[offset + channel]!;
+          }
+          samples++;
+        }
+      }
+      return {
+        averageError: error.map((value) => value / samples),
+        brightness: brightness.map((value) => value / samples),
+        samples,
+        width: canvas.width,
+        height: canvas.height,
+      };
     },
     `data:image/png;base64,${shot.toString("base64")}`,
   );
-  for (let i = 0; i < 3; i++)
-    expect(Math.abs(pixels.expected[i]! - pixels.seen[i]!)).toBeLessThan(25);
+  await test.info().attach("paused-frame-pixels", {
+    body: JSON.stringify(pixels),
+    contentType: "application/json",
+  });
+  await test
+    .info()
+    .attach("paused-frame-rendered", { body: shot, contentType: "image/png" });
+  expect(pixels.samples).toBe(336);
+  for (const difference of pixels.averageError)
+    expect(difference).toBeLessThan(25);
   expect(
-    pixels.expected.slice(0, 3).reduce((sum, n) => sum + n, 0),
+    pixels.brightness.reduce((sum, value) => sum + value, 0),
   ).toBeGreaterThan(40);
   return frame;
 }
@@ -293,11 +328,18 @@ test("I47 separate details saves immediately without loading programming or chan
     revision: before.revisionId,
   });
   await dialog.getByLabel("Channel name", { exact: true }).fill("Discard this");
-  page.once("dialog", (d) => d.dismiss());
   await page.keyboard.press("Escape");
+  await page
+    .locator("dialog.confirmation-dialog")
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(dialog).toBeVisible();
-  page.once("dialog", (d) => d.accept());
   await page.keyboard.press("Escape");
+  await page
+    .locator("dialog.confirmation-dialog")
+    .locator(".dialog-footer button")
+    .nth(1)
+    .click();
   await expect(dialog).toHaveCount(0);
   await expect(opener).toBeFocused();
   await opener.click();
@@ -323,7 +365,7 @@ test("I47 editing details from programming preserves its unpublished draft and s
     exact: true,
   });
   await program
-    .getByRole("combobox", { name: "Rotation", exact: true })
+    .getByRole("combobox", { name: "Play order", exact: true })
     .selectOption("shuffle");
   await program
     .getByRole("button", { name: "Edit details", exact: true })
@@ -363,7 +405,7 @@ test("I47 editing details from programming preserves its unpublished draft and s
     exact: true,
   });
   await expect(
-    preserved.getByRole("combobox", { name: "Rotation", exact: true }),
+    preserved.getByRole("combobox", { name: "Play order", exact: true }),
   ).toHaveValue("shuffle");
   await expect(
     preserved.getByRole("button", { name: "Edit details", exact: true }),
@@ -410,14 +452,31 @@ test("I47 a late details save cannot replace a reopened editor or its draft", as
       .getByRole("button", { name: "Save channel details", exact: true })
       .click();
     await entered;
-    page.once("dialog", (d) => d.accept());
+    const pending = page.getByRole("dialog", {
+      name: `Edit details · ${f.ch.name}`,
+      exact: true,
+    });
+    await expect(
+      pending.getByRole("button", { name: "Close dialog", exact: true }),
+    ).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(pending).toBeVisible();
+    // Closing is disabled while saving. Deliberate route navigation still
+    // exercises unmount/abort and a delayed server response against a new draft.
+    await page.evaluate(() => {
+      location.hash = "profiles";
+    });
     await page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Close dialog", exact: true })
+      .locator("dialog.confirmation-dialog")
+      .locator(".dialog-footer button")
+      .nth(1)
       .click();
+    await expect(
+      page.getByRole("heading", { name: "Profiles", exact: true }),
+    ).toBeVisible();
+    await page.goto(`/#channels?profile=${f.p}&channel=${b.id}`);
     await page
-      .getByRole("row")
-      .filter({ has: page.getByRole("button", { name: b.name, exact: true }) })
+      .locator(".channel-preview")
       .getByRole("button", { name: "Edit details", exact: true })
       .click();
     const next = page.getByRole("dialog", {
@@ -459,7 +518,10 @@ test("I47 an editor can rename an owned shared channel without changing or repub
     .getByLabel("Password", { exact: true })
     .fill("synthetic-viewer-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("navigation")).toBeAttached();
+  await selectInitialProfile(page);
+  await expect(
+    page.getByRole("navigation", { name: "Main navigation", exact: true }),
+  ).toBeAttached();
   await page.goto(`/#channels?profile=${f.p}&channel=${shared.id}`);
   await page
     .locator(".channel-preview")

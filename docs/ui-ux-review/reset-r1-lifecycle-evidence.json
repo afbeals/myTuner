@@ -1,0 +1,151 @@
+{
+  "before": {
+    "$FIXTURE/source/episode.mp4": {
+      "size": 34,
+      "sha256": "3915d502c27894cf2ce0ef0e4d9536cbc42839e74ce17c28d38bf5cdeb573b62"
+    },
+    "$FIXTURE/source/episode.nfo": {
+      "size": 47,
+      "sha256": "697c07c8d6897a3bf91bae7491bb3d351eb112c7db7388ebf8227379c43f5e1f"
+    },
+    "$FIXTURE/source/episode.en.srt": {
+      "size": 50,
+      "sha256": "0e9cadb40366a37457f078b33ab9ed1308a1ace1af3d460023b376caa3ed9ec0"
+    },
+    "$FIXTURE/metadata/operator.nfo": {
+      "size": 26,
+      "sha256": "9616a4b0422ecdc751e15f1efd2af09516ad0e86ad2133f9096c1a66c8580ba6"
+    },
+    "$FIXTURE/subtitles/operator.srt": {
+      "size": 26,
+      "sha256": "7490b916990c9535aec4b24c3fdb92425a26890e5825bfc1b6411de3dba0c11c"
+    },
+    "$FIXTURE/neighbor/unrelated-video.mkv": {
+      "size": 37,
+      "sha256": "27ca0d6a1073397f30bca926db4ed9c68ab5fcdbd4012448efc5cf1abe6c1dc5"
+    },
+    "$FIXTURE/data/operator-video.mp4": {
+      "size": 34,
+      "sha256": "829ea9fb2d8d2101a430cded84f85a32a276137d65a875da131148796e85d8ba"
+    },
+    "$FIXTURE/data/operator-note.txt": {
+      "size": 33,
+      "sha256": "d898938350e05f4462d57738338e80164b33986aec2e5c8c07cd2987653045e4"
+    },
+    "$FIXTURE/generated/operator-video.mp4": {
+      "size": 36,
+      "sha256": "95dbaca352a096a641096051777eb9795afe6ba18188857bbde0d9cee8fa3973"
+    },
+    "$FIXTURE/generated/operator-note.txt": {
+      "size": 32,
+      "sha256": "0159f4f87671092a61ad5f0487b2312b882a1e79b251bca1660e5f3cc92e2c39"
+    },
+    "$FIXTURE/cache/operator-video.mp4": {
+      "size": 32,
+      "sha256": "cf20fe53c1b4a14aa330211efa01c7803480a7f2934e1395df6d3e1c7dcc3bc4"
+    },
+    "$FIXTURE/cache/subtitles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.vtt": {
+      "size": 52,
+      "sha256": "9678076831a74c3364803df29cc784fb6096ffbdc1a12cf0325a7b45240bc2b8"
+    },
+    "$FIXTURE/generated/5b4c268f-9d03-401e-ae65-19ea32741fab/6e144efde684beaf437cf9cbc0fce353bb11b7b5380587ea118459bb88991953/conversion.mp4": {
+      "size": 29,
+      "sha256": "50d0748f700e56a6e2e1bc900d90152b95080c6a7bcaa013d2f024c415506006"
+    }
+  },
+  "browser": "Current administrator UUID retained; source dependencies checked+disabled; fresh selects all; Done/cancel read-only; viewer has no reset UI/API; execute endpoints 404",
+  "live": {
+    "playback": "11403274-1320-4669-87d6-470c22ad7bdd",
+    "background": {
+      "active": null,
+      "waiting": 1,
+      "paused": true,
+      "admitted": 0,
+      "completed": 0,
+      "pauseDuringPlayback": true
+    }
+  },
+  "liveCliRefusal": "Password for retained administrator bf6e0c16-a736-417f-9415-c09ae9d0c228: (node:24682) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)\n\nOffline reset refuses existing SQLite WAL/SHM/journal files. Complete normal recovery and a clean server shutdown first.\n",
+  "offlineGuards": "Wrong password, stale prior revision after a real metadata update, and incorrect typed confirmation all rejected; only a fresh full revision succeeds",
+  "offlineApply": {
+    "retainedAdmin": {
+      "id": "bf6e0c16-a736-417f-9415-c09ae9d0c228",
+      "username": "zeta-retained"
+    },
+    "revision": "8f3a5e0280e71bfeb1a3a443260f67e7ef6b4134d84494ed1c0518b26a5baeee",
+    "records": 128,
+    "backup": "$FIXTURE/data/backups/reset-snapshot-2026-11-27T07-51-45.420Z-54248bf4-3808-490f-a1a3-82d02a667c9a"
+  },
+  "afterResetStorage": {
+    "safety": {
+      "cleanupDisabled": true,
+      "outputWritesDisabled": false,
+      "resetMs": 1795765905449,
+      "protectedRoots": [
+        "$FIXTURE/metadata",
+        "$FIXTURE/source",
+        "$FIXTURE/subtitles"
+      ]
+    },
+    "newCacheWrite": true,
+    "existingCacheReplacementRefused": true,
+    "newGeneration": "completed using synthetic descriptor writer",
+    "quota": "failed before writer execution"
+  },
+  "after": {
+    "$FIXTURE/source/episode.mp4": {
+      "size": 34,
+      "sha256": "3915d502c27894cf2ce0ef0e4d9536cbc42839e74ce17c28d38bf5cdeb573b62"
+    },
+    "$FIXTURE/source/episode.nfo": {
+      "size": 47,
+      "sha256": "697c07c8d6897a3bf91bae7491bb3d351eb112c7db7388ebf8227379c43f5e1f"
+    },
+    "$FIXTURE/source/episode.en.srt": {
+      "size": 50,
+      "sha256": "0e9cadb40366a37457f078b33ab9ed1308a1ace1af3d460023b376caa3ed9ec0"
+    },
+    "$FIXTURE/metadata/operator.nfo": {
+      "size": 26,
+      "sha256": "9616a4b0422ecdc751e15f1efd2af09516ad0e86ad2133f9096c1a66c8580ba6"
+    },
+    "$FIXTURE/subtitles/operator.srt": {
+      "size": 26,
+      "sha256": "7490b916990c9535aec4b24c3fdb92425a26890e5825bfc1b6411de3dba0c11c"
+    },
+    "$FIXTURE/neighbor/unrelated-video.mkv": {
+      "size": 37,
+      "sha256": "27ca0d6a1073397f30bca926db4ed9c68ab5fcdbd4012448efc5cf1abe6c1dc5"
+    },
+    "$FIXTURE/data/operator-video.mp4": {
+      "size": 34,
+      "sha256": "829ea9fb2d8d2101a430cded84f85a32a276137d65a875da131148796e85d8ba"
+    },
+    "$FIXTURE/data/operator-note.txt": {
+      "size": 33,
+      "sha256": "d898938350e05f4462d57738338e80164b33986aec2e5c8c07cd2987653045e4"
+    },
+    "$FIXTURE/generated/operator-video.mp4": {
+      "size": 36,
+      "sha256": "95dbaca352a096a641096051777eb9795afe6ba18188857bbde0d9cee8fa3973"
+    },
+    "$FIXTURE/generated/operator-note.txt": {
+      "size": 32,
+      "sha256": "0159f4f87671092a61ad5f0487b2312b882a1e79b251bca1660e5f3cc92e2c39"
+    },
+    "$FIXTURE/cache/operator-video.mp4": {
+      "size": 32,
+      "sha256": "cf20fe53c1b4a14aa330211efa01c7803480a7f2934e1395df6d3e1c7dcc3bc4"
+    },
+    "$FIXTURE/cache/subtitles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.vtt": {
+      "size": 52,
+      "sha256": "9678076831a74c3364803df29cc784fb6096ffbdc1a12cf0325a7b45240bc2b8"
+    },
+    "$FIXTURE/generated/5b4c268f-9d03-401e-ae65-19ea32741fab/6e144efde684beaf437cf9cbc0fce353bb11b7b5380587ea118459bb88991953/conversion.mp4": {
+      "size": 29,
+      "sha256": "50d0748f700e56a6e2e1bc900d90152b95080c6a7bcaa013d2f024c415506006"
+    }
+  },
+  "restored": "Real restore CLI of pre-reset backup, normal main restart, retained admin signs in, cleanup still refuses, original and both backup bundle hashes identical",
+  "cleanup": "Fixture directory absent after test teardown; all normal main.ts child processes exited code 0 after SIGTERM; Playwright contexts/browser closed"
+}

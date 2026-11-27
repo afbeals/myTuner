@@ -198,7 +198,9 @@ try {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await page.getByRole("navigation").waitFor();
+  await page
+    .getByRole("navigation", { name: "Main navigation", exact: true })
+    .waitFor();
   const p = await page.evaluate(async () =>
     (await (await fetch("/api/profiles")).json()).find(
       (p) => p.name === "Living Room",

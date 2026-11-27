@@ -1,3 +1,4 @@
+import { collectionMembership } from "./collection-membership.js";
 import {
   displayMedia,
   createMediaProjector,
@@ -643,6 +644,61 @@ function buildBrowseLibrary(
     searchItems,
   };
 }
+/** A creation identifier is never an edit authorization. Live identical retries are safe. */
+export function createCollection(
+  store: Store,
+  account: Account,
+  profileId: string,
+  creationId: string,
+  name: string,
+  mediaIds: string[],
+) {
+  requireProfile(store, account, profileId, true);
+  return store.transaction(() => {
+    const current = store.db
+      .prepare("SELECT * FROM collections WHERE id=?")
+      .get(creationId);
+    if (current) {
+      invariant(
+        current.owner_account_id === account.id,
+        404,
+        "Collection not found",
+      );
+      invariant(
+        current.deleted_ms === null,
+        409,
+        "This collection was deleted. Start a new collection draft.",
+      );
+      const previous = collectionMembership(
+        store,
+        account,
+        profileId,
+        creationId,
+      );
+      selectMedia(store, account, profileId, { type: "media", ids: mediaIds });
+      invariant(
+        previous.name === name &&
+          JSON.stringify(previous.ids) ===
+            JSON.stringify([...new Set(mediaIds)].sort()),
+        409,
+        "This collection draft was already saved with different information. Open the saved collection or start a new draft.",
+      );
+      return { id: creationId, name: previous.name };
+    }
+    selectMedia(store, account, profileId, { type: "media", ids: mediaIds });
+    store.db
+      .prepare(
+        "INSERT INTO collections(id,name,owner_account_id) VALUES(?,?,?)",
+      )
+      .run(creationId, name, account.id);
+    const save = store.db.prepare(
+      "INSERT INTO collection_items(collection_id,media_id) VALUES(?,?)",
+    );
+    for (const mediaId of new Set(mediaIds)) save.run(creationId, mediaId);
+    return { id: creationId, name };
+  });
+}
+
 export function saveCollection(
   store: Store,
   account: Account,
@@ -650,6 +706,7 @@ export function saveCollection(
   name: string,
   mediaIds: string[],
   collectionId?: string,
+  expectedRevision?: string,
 ) {
   requireProfile(store, account, profileId, true);
   const id = collectionId ?? randomUUID();
@@ -668,6 +725,25 @@ export function saveCollection(
   }
   selectMedia(store, account, profileId, { type: "media", ids: mediaIds });
   store.transaction(() => {
+    if (collectionId && expectedRevision !== undefined) {
+      const previous = collectionMembership(
+        store,
+        account,
+        profileId,
+        collectionId,
+      );
+      invariant(
+        previous.revision === expectedRevision,
+        409,
+        "Collection changed elsewhere; reopen it before saving",
+      );
+      if (
+        previous.name === name &&
+        JSON.stringify(previous.ids) ===
+          JSON.stringify([...new Set(mediaIds)].sort())
+      )
+        return;
+    }
     store.db
       .prepare(
         "INSERT INTO collections(id,name,owner_account_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name",
@@ -701,7 +777,7 @@ export function collectionSummaries(
       (g.subtree='' OR h.relative_path=g.subtree OR substr(h.relative_path,1,length(g.subtree)+1)=g.subtree||'/')))`;
   return store.db
     .prepare(
-      `SELECT c.id,c.name,c.owner_account_id AS ownerAccountId,SUM(CASE WHEN m.available=1 THEN 1 ELSE 0 END) AS count
+      `SELECT c.id,c.name,c.owner_account_id AS ownerAccountId,SUM(CASE WHEN m.available=1 THEN 1 ELSE 0 END) AS count,COUNT(ci.media_id) AS totalCount,SUM(CASE WHEN m.available=0 THEN 1 ELSE 0 END) AS unavailableCount
     FROM collections c LEFT JOIN collection_items ci ON ci.collection_id=c.id LEFT JOIN media m ON m.id=ci.media_id
     WHERE c.deleted_ms IS NULL${access} GROUP BY c.id ORDER BY c.name,c.id`,
     )
@@ -712,6 +788,8 @@ export function collectionSummaries(
     name: string;
     ownerAccountId: string;
     count: number;
+    totalCount: number;
+    unavailableCount: number;
   }[];
 }
 
@@ -721,6 +799,7 @@ export function programmingOptions(
   profileId: string,
   input: {
     search: string;
+    titleOnly?: boolean;
     offset: number;
     limit: number;
     sourceId?: string | undefined;
@@ -732,7 +811,7 @@ export function programmingOptions(
     store,
     account,
     profileId,
-    input.search,
+    input.titleOnly ? "" : input.search,
     input.sourceId,
   );
   const options: {
@@ -831,6 +910,11 @@ export function programmingOptions(
   const filtered = options
     .filter(
       (option) =>
+        (!input.titleOnly ||
+          !input.search ||
+          option.title
+            .toLocaleLowerCase()
+            .includes(input.search.toLocaleLowerCase())) &&
         (!input.sourceId || option.sourceId === input.sourceId) &&
         (!input.kind || option.kind === input.kind),
     )

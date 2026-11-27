@@ -1,8 +1,16 @@
 import {
+  assertSafeOutputRoot,
+  assertOutputWritesAllowed,
+  outputCleanupDisabled,
+  type SafetyStore,
+} from "./storage-safety.js";
+import {
   constants,
   closeSync,
   fstatSync,
   lstatSync,
+  linkSync,
+  readSync,
   mkdirSync,
   openSync,
   realpathSync,
@@ -35,7 +43,10 @@ const same = (a: Identity, b: Identity) => a.dev === b.dev && a.ino === b.ino;
  */
 export class OutputPaths {
   private root: { path: string; identity: Identity } | undefined;
-  constructor(private readonly configured: string) {
+  constructor(
+    private readonly configured: string,
+    private readonly store?: SafetyStore,
+  ) {
     try {
       this.capture();
     } catch (error) {
@@ -43,6 +54,7 @@ export class OutputPaths {
     }
   }
   capture() {
+    assertSafeOutputRoot(this.store, this.configured);
     const info = lstatSync(this.configured, { bigint: true });
     invariant(
       info.isDirectory() && !info.isSymbolicLink(),
@@ -59,6 +71,8 @@ export class OutputPaths {
     return path;
   }
   create(originals: string[]) {
+    assertOutputWritesAllowed(this.store);
+    assertSafeOutputRoot(this.store, this.configured);
     let ancestor = this.configured;
     const missing: string[] = [];
     let path: string;
@@ -169,6 +183,7 @@ export class OutputPaths {
     }
   }
   prepare(rel: string, create: boolean): OutputPath {
+    if (create) assertOutputWritesAllowed(this.store);
     invariant(
       !rel.startsWith(sep) && !rel.split(sep).includes(".."),
       409,
@@ -226,8 +241,11 @@ export class OutputPaths {
     return info;
   }
   stage(name: string): OutputStage {
+    assertOutputWritesAllowed(this.store);
     invariant(
-      /^\.partial-[a-f0-9-]{36}\.(jpg|gif|mp4)$/.test(name),
+      /^(?:\.partial-[a-f0-9-]{36}\.(?:jpg|gif|mp4|ts|vtt|json)|[a-f0-9]{64}\.(?:vtt|json)\.[a-f0-9-]{36}\.partial)$/.test(
+        name,
+      ),
       409,
       "Invalid generated stage",
     );
@@ -258,9 +276,12 @@ export class OutputPaths {
     }
   }
   publish(stage: OutputStage, output: OutputPath) {
+    assertOutputWritesAllowed(this.store);
     this.check(output);
     const directory = this.directory(
-      dirname(output.relative).split(sep),
+      dirname(output.relative) === "."
+        ? []
+        : dirname(output.relative).split(sep),
       false,
     );
     try {
@@ -284,12 +305,43 @@ export class OutputPaths {
         409,
         "Generated stage changed",
       );
-      this.existing(output);
-      renameSync(from, to);
+      const existing = this.existing(output);
+      if (outputCleanupDisabled(this.store)) {
+        invariant(
+          !existing,
+          409,
+          "Existing output is preserved after a data reset; use a new dedicated empty output root to replace it",
+        );
+        // link is an atomic no-replace publication. close() removes only this
+        // operation's inode-verified stage, never a previous destination.
+        linkSync(from, to);
+      } else renameSync(from, to);
       this.check(output);
     } finally {
       for (const fd of directory.descriptors.reverse()) closeSync(fd);
     }
+  }
+  read(stage: OutputStage, maximum: number): Buffer {
+    const info = fstatSync(stage.fd);
+    invariant(
+      info.size > 0 && info.size < maximum,
+      502,
+      "Invalid bounded output size",
+    );
+    const bytes = Buffer.alloc(info.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(
+        stage.fd,
+        bytes,
+        offset,
+        bytes.length - offset,
+        offset,
+      );
+      invariant(count > 0, 502, "Incomplete output file");
+      offset += count;
+    }
+    return bytes;
   }
   close(stage: OutputStage) {
     try {

@@ -444,3 +444,53 @@ test(
     }
   },
 );
+
+test("directory-check shutdown is bounded and late held I/O cannot reauthorize against closed storage", async (t) => {
+  const f = await fixture(t);
+  let release!: (path: string) => void,
+    entered!: () => void,
+    stopped = false,
+    lateAuthorizations = 0;
+  const blocked = new Promise<string>((resolve) => {
+      release = resolve;
+    }),
+    started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+  const resolver = new PathResolver(
+    f.store,
+    [],
+    { entries: 256, directories: 32, samples: 5, milliseconds: 100 },
+    {
+      ...fs,
+      realpath: async () => {
+        entered();
+        return blocked;
+      },
+    },
+  );
+  const check = resolver.check(request(f.media), () => {
+    if (stopped) {
+      lateAuthorizations++;
+      throw new Error("Storage already closed");
+    }
+  });
+  const rejected = assert.rejects(check, { name: "AbortError" });
+  try {
+    await started;
+    await resolver.stop(20);
+    stopped = true;
+    // Reject further callers even though the uncancellable syscall is held.
+    await assert.rejects(
+      resolver.check(request(f.media), () => {}),
+      /stopping/,
+    );
+    release(f.media);
+    await rejected;
+    await setImmediate();
+    assert.equal(lateAuthorizations, 0);
+  } finally {
+    release(f.media);
+    await resolver.stop();
+  }
+});

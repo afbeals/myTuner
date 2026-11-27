@@ -1,3 +1,4 @@
+import { SetupDirectories } from "./setup-directories.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Store } from "./database.js";
@@ -22,6 +23,37 @@ export function registerSetupRoutes(
   writableRoots: string[],
 ) {
   const paths = new PathSuggestions(store, writableRoots);
+  const browser = new SetupDirectories(store, paths, writableRoots);
+  app.addHook("preClose", async () => browser.stop());
+  app.get("/api/admin/setup/directories", async (request, reply) => {
+    const authorize = () => requireAdmin(actor(request));
+    authorize();
+    const input = z
+      .object({
+        root: z.string().min(1).max(4096),
+        parent: z.string().max(4096).default(""),
+        offset: z.coerce.number().int().min(0).max(100000).default(0),
+        purpose: z.enum(["source", "metadata", "subtitles"]),
+        sourceId: z.string().uuid().optional(),
+      })
+      .strict()
+      .parse(request.query);
+    if (input.sourceId) sourceById(store, input.sourceId);
+    const controller = new AbortController();
+    const abort = () =>
+      controller.abort(new Error("Folder request disconnected"));
+    const closed = () => {
+      if (!reply.raw.writableEnded) abort();
+    };
+    request.raw.once("aborted", abort);
+    reply.raw.once("close", closed);
+    try {
+      return await browser.read(input, authorize, controller.signal);
+    } finally {
+      request.raw.off("aborted", abort);
+      reply.raw.off("close", closed);
+    }
+  });
   const resolver = new PathResolver(store, writableRoots);
   app.addHook("preClose", async () => resolver.stop());
   app.post("/api/admin/setup/check-directory", async (request, reply) => {

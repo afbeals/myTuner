@@ -1,3 +1,8 @@
+import { ChannelWizard } from "./ChannelWizard";
+import { ProgrammingRules } from "./ProgrammingRules";
+import { canManageProfile } from "./permissions";
+import { eventId } from "./playback-utils";
+import { confirmAction } from "./confirmation";
 import {
   ChannelStatistics,
   BreakDiagnostics,
@@ -12,20 +17,18 @@ import {
 import { ResourceLink } from "./ResourceLink";
 import { ReadinessPanel } from "./Inspection";
 import { useDraftNavigation } from "./navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Workspace } from "./App";
 import type {
   Channel,
-  Collection,
   Entry,
   GuideChannel,
-  Library,
   Programming,
   Selection,
+  Source,
 } from "./types";
 import { noBreaks } from "./types";
 import { api, ApiError } from "./api";
-import { choices } from "./Library";
 import {
   Action,
   Empty,
@@ -33,18 +36,33 @@ import {
   Form,
   Load,
   Modal,
+  ModalCancel,
   Select,
   time,
+  duration,
   useRemote,
   value,
-  number,
+  SubmissionErrorBox,
+  MediaReferenceContext,
+  timeWithSeconds,
 } from "./ui";
 export function ChannelsPage(
   props: Workspace & {
     initialSelection: Selection | null;
     onSelectionUsed: () => void;
+    embedded?: boolean;
+    createRequested?: number;
   },
 ) {
+  const profile = props.profiles.find(
+      (profile) => profile.id === props.profileId,
+    ),
+    manage = canManageProfile(props.account, profile),
+    profileName = profile?.name ?? "this profile";
+  const canEditChannel = (channel: Channel) =>
+    manage &&
+    (props.account.role === "admin" ||
+      channel.ownerAccountId === props.account.id);
   const list = useRemote<Channel[] | { items: Channel[] }>(
       props.account.role === "admin"
         ? "/api/admin/channels"
@@ -65,7 +83,16 @@ export function ChannelsPage(
     [editing, setEditing] = useState(false),
     [details, setDetails] = useState<Channel | null>(null),
     [search, setSearch] = useState(""),
-    [filter, setFilter] = useState("all");
+    [searchText, setSearchText] = useState(""),
+    [cardOffset, setCardOffset] = useState(0),
+    [deleteImpact, setDeleteImpact] = useState<{
+      canDelete: boolean;
+      counts: Record<string, number>;
+    } | null>(null),
+    [notice, setNotice] = useState(""),
+    [filter, setFilter] = useState("all"),
+    [addedToGuides, setAddedToGuides] = useState<Set<string>>(() => new Set()),
+    [publishedIds, setPublishedIds] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     setSelected(null);
     setEditing(false);
@@ -75,8 +102,23 @@ export function ChannelsPage(
     setCopiedConfig(null);
   }, [props.profileId]);
   useEffect(() => {
-    if (props.initialSelection) setCreating(true);
-  }, [props.initialSelection]);
+    if (props.initialSelection && manage) setCreating(true);
+  }, [props.initialSelection, manage]);
+  useEffect(() => {
+    if (props.createRequested && manage) setCreating(true);
+  }, [props.createRequested, manage]);
+  useEffect(() => setCardOffset(0), [search, filter]);
+  useEffect(() => {
+    if (guide.data)
+      setAddedToGuides(
+        (old) =>
+          new Set(
+            [...old].filter((key) => !key.startsWith(`${props.profileId}:`)),
+          ),
+      );
+  }, [guide.data, props.profileId]);
+  useEffect(() => setDeleteImpact(null), [selection?.id]);
+
   const rows = (
     Array.isArray(list.data) ? list.data : (list.data?.items ?? [])
   ).filter(
@@ -93,6 +135,36 @@ export function ChannelsPage(
     : (list.data?.items ?? []);
   const selected =
     allChannels.find((channel) => channel.id === selection?.id) ?? selection;
+  const inGuide = Boolean(
+    selected &&
+    (guide.data?.channels.some((channel) => channel.id === selected.id) ||
+      addedToGuides.has(`${props.profileId}:${selected.id}`)),
+  );
+  const published = Boolean(
+    selected &&
+    (publishedIds.has(selected.id) ||
+      selected.hasProgramming ||
+      guide.data?.channels.find((channel) => channel.id === selected.id)
+        ?.entries.length),
+  );
+  useEffect(() => {
+    if (
+      list.data &&
+      !list.loading &&
+      selection &&
+      !allChannels.some((channel) => channel.id === selection.id)
+    ) {
+      setSelected(null);
+      setEditing(false);
+      setDetails(null);
+    }
+  }, [list.data]);
+  const previewPanel = useRef<HTMLElement>(null),
+    channelList = useRef<HTMLDivElement>(null);
+  const chooseChannel = (channel: Channel) => {
+    setSelected(channel);
+    requestAnimationFrame(() => previewPanel.current?.focus());
+  };
   const resolvedTarget = useRef("");
   const [resourceMissing, setResourceMissing] = useState(false);
   useEffect(() => {
@@ -147,12 +219,31 @@ export function ChannelsPage(
     <>
       <header className="page-head">
         <div>
-          <h1>Channels</h1>
+          {props.embedded ? (
+            <h2 id="network-channels" tabIndex={-1}>
+              Channels
+            </h2>
+          ) : (
+            <h1>Channels</h1>
+          )}
           <p>Program the channels your household tunes into.</p>
         </div>
-        <button onClick={() => setCreating(true)}>+ Create channel</button>
+        {!props.embedded && manage && (
+          <button onClick={() => setCreating(true)}>Create channel</button>
+        )}
       </header>
-      <div className="filters">
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
+      <form
+        className="filters"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setSearch(searchText);
+        }}
+      >
         <div className="tabs">
           {[
             "all",
@@ -172,10 +263,11 @@ export function ChannelsPage(
         </div>
         <Field
           label="Search channels"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
         />
-      </div>
+        <button type="submit">Search channels</button>
+      </form>
       <Load {...list} retry={list.reload} />
       {resourceMissing && (
         <p role="alert">
@@ -183,14 +275,111 @@ export function ChannelsPage(
           changed.
         </p>
       )}
-      <div className="channel-workspace">
-        <section className="panel channel-table">
+      {props.embedded && (
+        <>
+          {!rows.length && !list.loading && list.data && (
+            <Empty
+              title={
+                search || filter !== "all"
+                  ? "No matching channels"
+                  : "Create your first channel"
+              }
+            >
+              <p>
+                {search || filter !== "all"
+                  ? "Try clearing the channel search and filters."
+                  : "Choose programming, preview a schedule, then create your channel."}
+              </p>
+              {(search || filter !== "all") && (
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setSearch("");
+                    setSearchText("");
+                    setFilter("all");
+                  }}
+                >
+                  Clear channel filters
+                </button>
+              )}
+            </Empty>
+          )}
+          <div
+            className="channel-strip"
+            role="region"
+            ref={channelList}
+            tabIndex={-1}
+            aria-label="Your channels"
+          >
+            {rows.slice(cardOffset, cardOffset + 50).map((channel) => (
+              <article className="panel channel-card" key={channel.id}>
+                <span className="badge">
+                  {channel.archived
+                    ? "Archived"
+                    : channel.visibility === "private"
+                      ? "Private"
+                      : "Shared"}
+                </span>
+                <button
+                  className="text-button"
+                  onClick={() => chooseChannel(channel)}
+                >
+                  {channel.name}
+                </button>
+                <p>{channel.shortName}</p>
+                <p>
+                  {guide.data?.channels
+                    .find((current) => current.id === channel.id)
+                    ?.entries.find(
+                      (entry) => entry.startMs <= now && entry.endMs > now,
+                    )?.title ??
+                    (channel.archived
+                      ? "Archived channel"
+                      : "Select to view schedule")}
+                </p>
+              </article>
+            ))}
+          </div>
+          {rows.length > 50 && (
+            <div className="actions">
+              <button
+                className="secondary"
+                disabled={!cardOffset}
+                onClick={() => setCardOffset((n) => Math.max(0, n - 50))}
+              >
+                Previous channels
+              </button>
+              <button
+                className="secondary"
+                disabled={cardOffset + 50 >= rows.length}
+                onClick={() => setCardOffset((n) => n + 50)}
+              >
+                More channels
+              </button>
+            </div>
+          )}
+        </>
+      )}
+      <div
+        className={
+          props.embedded
+            ? "channel-workspace network-channel-workspace"
+            : "channel-workspace"
+        }
+      >
+        <section className="panel channel-table" hidden={props.embedded}>
           <div className="section-head">
             <h2>Your network</h2>
             <span className="badge">{rows.length} channels</span>
           </div>
           {!rows.length && list.data && !list.loading ? (
-            <Empty title="Your network starts here">
+            <Empty
+              title={
+                search || filter !== "all"
+                  ? "No matching channels"
+                  : "Your network starts here"
+              }
+            >
               Create a channel and choose a whole show, season, collection or
               folder.
             </Empty>
@@ -207,9 +396,7 @@ export function ChannelsPage(
                 </thead>
                 <tbody>
                   {rows.map((c) => {
-                    const canEdit =
-                      props.account.role === "admin" ||
-                      c.ownerAccountId === props.account.id;
+                    const canEdit = canEditChannel(c);
                     const current =
                       guide.data?.channels
                         .find((g) => g.id === c.id)
@@ -222,7 +409,7 @@ export function ChannelsPage(
                         <td>
                           <button
                             className="text-button"
-                            onClick={() => setSelected(c)}
+                            onClick={() => chooseChannel(c)}
                           >
                             {c.name}
                           </button>
@@ -247,7 +434,7 @@ export function ChannelsPage(
                             <div className="actions">
                               <button
                                 className="secondary"
-                                onClick={() => {
+                                onClick={async () => {
                                   setSelected(c);
                                   setDetails(c);
                                 }}
@@ -256,7 +443,7 @@ export function ChannelsPage(
                               </button>
                               <button
                                 className="secondary"
-                                onClick={() => {
+                                onClick={async () => {
                                   setSelected(c);
                                   setEditing(true);
                                 }}
@@ -288,7 +475,10 @@ export function ChannelsPage(
                   <h2>{c.name}</h2>
                   <p>{current[0]?.title ?? "Preview programming"}</p>
                   {current[1] && <small>Next · {current[1].title}</small>}
-                  <button className="secondary" onClick={() => setSelected(c)}>
+                  <button
+                    className="secondary"
+                    onClick={() => chooseChannel(c)}
+                  >
                     Open {c.name}
                   </button>
                 </article>
@@ -296,31 +486,47 @@ export function ChannelsPage(
             })}
           </div>
         </section>
-        <aside className="panel channel-preview">
+        <aside
+          ref={previewPanel}
+          tabIndex={-1}
+          className="panel channel-preview"
+          hidden={props.embedded && !selected}
+        >
           <span className="eyebrow">Channel preview</span>
           {selected ? (
             <>
+              {props.embedded && (
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setSelected(null);
+                    channelList.current?.focus();
+                  }}
+                >
+                  Back to channels
+                </button>
+              )}
               <h2 id="linked-channel-title" tabIndex={-1}>
                 {selected.name}
               </h2>
-              {(props.account.role === "admin" ||
-                selected.ownerAccountId === props.account.id) &&
-                !selected.archived && (
-                  <button
-                    className="secondary"
-                    onClick={() => {
-                      setCopySource(selected);
-                      setCreating(true);
-                    }}
-                  >
-                    Create from this channel
-                  </button>
-                )}
-              <ChannelStatistics
-                key={selected.id}
-                profileId={props.profileId}
-                channelId={selected.id}
-              />
+              {canEditChannel(selected) && !selected.archived && (
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    setCopySource(selected);
+                    setCreating(true);
+                  }}
+                >
+                  Create from this channel
+                </button>
+              )}
+              {!selected.archived && (
+                <ChannelStatistics
+                  key={`statistics:${selected.id}`}
+                  profileId={props.profileId}
+                  channelId={selected.id}
+                />
+              )}
               <ResourceLink
                 kind="channel"
                 profileId={props.profileId}
@@ -331,17 +537,27 @@ export function ChannelsPage(
                   ? "Private · visible to its owner and administrators"
                   : "Shared household channel"}
               </p>
-              {props.account.role === "admin" && (
+              {props.account.role === "admin" && !selected.archived && (
                 <ReadinessPanel
-                  key={selected.id}
+                  key={`readiness:${selected.id}`}
                   profileId={props.profileId}
                   channelId={selected.id}
+                  identity={props.account.id}
+                  version={props.version}
                 />
               )}
               {selected.description && (
                 <p className="metadata-preview">{selected.description}</p>
               )}
-              <h3>Coming up</h3>
+              {selected.archived && (
+                <p role="status">
+                  Archived · Restore this channel before editing programming or
+                  adding it to a guide. Previous subscriptions are not restored.
+                </p>
+              )}
+              <h3>
+                {selected.archived ? "Archived programming" : "Coming up"}
+              </h3>
               {entries.slice(0, 5).map((e) => (
                 <div className="preview-entry" key={e.id}>
                   <time>{time(e.startMs)}</time>
@@ -351,13 +567,19 @@ export function ChannelsPage(
               ))}
               {!entries.length && (
                 <p>
-                  Publish programming and subscribe this profile to see its
-                  guide.
+                  {selected.archived
+                    ? "Restore this channel to add it to a guide."
+                    : published
+                      ? inGuide
+                        ? "Published. The guide is loading its scheduled programming."
+                        : `Published. Add this channel to ${profileName}’s guide to watch.`
+                      : selected.hasProgramming === false
+                        ? "No programming published yet. Add content and publish a preview."
+                        : `Add this channel to ${profileName}’s guide to see its programming when published.`}
                 </p>
               )}
               <div className="actions">
-                {(props.account.role === "admin" ||
-                  selected.ownerAccountId === props.account.id) && (
+                {canEditChannel(selected) && (
                   <>
                     <button
                       className="secondary"
@@ -365,42 +587,59 @@ export function ChannelsPage(
                     >
                       Edit details
                     </button>
-                    <button onClick={() => setEditing(true)}>
-                      Edit programming
-                    </button>
+                    {!selected.archived && (
+                      <button onClick={() => setEditing(true)}>
+                        Edit programming
+                      </button>
+                    )}
                   </>
                 )}
-                <Action
-                  secondary
-                  task={async () => {
-                    await api(
-                      `/api/profiles/${props.profileId}/subscriptions/${selected.id}`,
-                      "PUT",
-                    );
-                    refresh();
-                  }}
-                >
-                  Add to profile guide
-                </Action>
+                {!selected.archived && manage && (
+                  <Action
+                    secondary
+                    disabled={inGuide || guide.loading}
+                    task={async () => {
+                      await api(
+                        `/api/profiles/${props.profileId}/subscriptions/${selected.id}`,
+                        "PUT",
+                      );
+                      setAddedToGuides(
+                        (old) =>
+                          new Set([
+                            ...old,
+                            `${props.profileId}:${selected.id}`,
+                          ]),
+                      );
+                      setNotice(
+                        `Added ${selected.name} to ${profileName}’s guide.`,
+                      );
+                      refresh();
+                    }}
+                  >
+                    {inGuide
+                      ? `Already in ${profileName}’s guide`
+                      : "Add to profile guide"}
+                  </Action>
+                )}
+                {manage && inGuide && <a href="#subscriptions">Manage guide</a>}
                 <button
                   className="secondary"
                   onClick={() => props.watch(selected.id)}
-                  disabled={!entries.length}
+                  disabled={selected.archived || !entries.length}
                 >
                   Watch live
                 </button>
-                {(props.account.role === "admin" ||
-                  selected.ownerAccountId === props.account.id) && (
+                {canEditChannel(selected) && (
                   <Action
                     secondary
                     danger
                     task={async () => {
                       if (
-                        !window.confirm(
+                        !(await confirmAction(
                           selected.archived
                             ? "Restore this channel? Subscriptions must be added again."
                             : "Archive this channel and remove its subscriptions?",
-                        )
+                        ))
                       )
                         return;
                       await api(`/api/channels/${selected.id}`, "PATCH", {
@@ -413,7 +652,54 @@ export function ChannelsPage(
                     {selected.archived ? "Restore channel" : "Archive channel"}
                   </Action>
                 )}
+                {selected.archived && canEditChannel(selected) && (
+                  <Action
+                    secondary
+                    danger
+                    label={`Permanently delete ${selected.name}`}
+                    task={async () => {
+                      const impact = await api<{
+                        revision: string;
+                        canDelete: boolean;
+                        counts: Record<string, number>;
+                      }>(`/api/channels/${selected.id}/dependencies`);
+                      setDeleteImpact(impact);
+                      if (!impact.canDelete) return;
+                      if (
+                        !(await confirmAction(
+                          `Permanently delete archived channel “${selected.name}”? This removes its remaining settings. Original media is kept.`,
+                          {
+                            title: `Delete ${selected.name} permanently?`,
+                            label: "Delete channel",
+                          },
+                        ))
+                      )
+                        return;
+                      await api(
+                        `/api/channels/${selected.id}/permanent`,
+                        "DELETE",
+                        { revision: impact.revision },
+                      );
+                      setSelected(null);
+                      setNotice(`Archived channel deleted: ${selected.name}.`);
+                      refresh();
+                    }}
+                  >
+                    Delete permanently
+                  </Action>
+                )}
               </div>
+              {deleteImpact && !deleteImpact.canDelete && (
+                <p role="alert" className="notice">
+                  Permanent deletion is blocked by{" "}
+                  {Object.entries(deleteImpact.counts)
+                    .filter(([, count]) => count)
+                    .map(([name, count]) => `${count} ${name}`)
+                    .join(", ")}
+                  . Retained history is kept until its normal retention process
+                  removes it.
+                </p>
+              )}
             </>
           ) : (
             <Empty title="Choose a channel">
@@ -422,101 +708,30 @@ export function ChannelsPage(
           )}
         </aside>
       </div>
-      {creating && (
-        <Modal
-          title={
-            copySource ? "Copy channel into a new draft" : "Create channel"
-          }
-          closeDisabled={creatingSaving}
+      {creating && manage && (
+        <ChannelWizard
+          {...props}
+          initialSelection={props.initialSelection}
+          copySource={copySource}
           onClose={() => {
             setCreating(false);
             setCopySource(null);
             props.onSelectionUsed();
           }}
-        >
-          <Form
-            guardDraft={true}
-            submit="Create & program"
-            onSave={async (d) => {
-              setCreatingSaving(true);
-              try {
-                const targetProfile = copySource
-                  ? value(d, "targetProfile")
-                  : props.profileId;
-                const copy = copySource
-                  ? await api<{ config: Programming }>(
-                      `/api/channels/${copySource.id}/draft-copy?profileId=${targetProfile}`,
-                    )
-                  : null;
-                const c = await api<Channel>("/api/channels", "POST", {
-                  name: value(d, "name"),
-                  profileId: targetProfile,
-                  visibility: copySource ? "private" : value(d, "visibility"),
-                  shortName: value(d, "shortName") || null,
-                });
-                setSelected(c);
-                setCopiedConfig(copy?.config ?? null);
-                setCopySource(null);
-                setCreating(false);
-                setEditing(true);
-                refresh();
-              } finally {
-                setCreatingSaving(false);
-              }
-            }}
-          >
-            <Field
-              label="Channel name"
-              name="name"
-              required
-              maxLength={120}
-              defaultValue={
-                copySource ? `${copySource.name} copy`.slice(0, 120) : ""
-              }
-            />
-            {copySource && (
-              <>
-                <Select
-                  label="Target profile"
-                  name="targetProfile"
-                  defaultValue={props.profileId}
-                >
-                  {props.profiles.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-                <p>
-                  A new private unpublished draft with an independent timeline.
-                  Subscriptions, history and rotation positions are not copied.
-                </p>
-              </>
-            )}
-            <Field
-              label="Short name (optional)"
-              name="shortName"
-              maxLength={12}
-              hint="Leave blank to derive a compact label from the channel name."
-            />
-            {!copySource && (
-              <Select label="Visibility" name="visibility">
-                <option value="private">
-                  Private · only you and administrators
-                </option>
-                {props.account.role === "admin" && (
-                  <option value="shared">Shared · household catalog</option>
-                )}
-              </Select>
-            )}
-            <p>
-              Subscriptions use one shared live timeline. Playback always joins
-              the current program.
-            </p>
-          </Form>
-        </Modal>
+          onCreated={(channel) => {
+            setCreating(false);
+            setCopySource(null);
+            setSelected(channel);
+            setPublishedIds((old) => new Set([...old, channel.id]));
+            setNotice(
+              `Channel created and published: ${channel.name}. Add it to a profile guide when ready.`,
+            );
+            props.onSelectionUsed();
+            refresh();
+          }}
+        />
       )}
-      {editing && selected && (
+      {editing && selected && canEditChannel(selected) && (
         <ProgramEditor
           key={`program:${props.profileId}:${selected.id}`}
           {...props}
@@ -525,16 +740,19 @@ export function ChannelsPage(
             ? { draftConfig: copiedConfig, profileId: copiedConfig.profileId }
             : {})}
           onDetails={() => setDetails(selected)}
-          onClose={() => {
+          onClose={async () => {
             setEditing(false);
             setDetails(null);
             setCopiedConfig(null);
             props.onSelectionUsed();
           }}
-          onSaved={refresh}
+          onSaved={() => {
+            setPublishedIds((old) => new Set([...old, selected.id]));
+            refresh();
+          }}
         />
       )}
-      {details && (
+      {details && canEditChannel(details) && (
         <ChannelDetailsEditor
           key={`details:${props.profileId}:${details.id}`}
           {...props}
@@ -553,6 +771,7 @@ function ChannelDetailsEditor(
     onSaved: () => void;
   },
 ) {
+  const formId = useId();
   const [dirty, setDirty] = useState(false),
     [saved, setSaved] = useState(false),
     [saving, setSaving] = useState(false);
@@ -571,11 +790,23 @@ function ChannelDetailsEditor(
       controller.current.abort();
     };
   }, []);
-  const close = () => {
-    if (!dirty || window.confirm(discard)) props.onClose();
+  const close = async () => {
+    if (!dirty || (await confirmAction(discard))) props.onClose();
   };
   return (
-    <Modal title={`Edit details · ${props.channel.name}`} onClose={close}>
+    <Modal
+      title={`Edit details · ${props.channel.name}`}
+      onClose={close}
+      closeDisabled={saving}
+      footer={
+        <div className="actions">
+          <button form={formId} type="submit" disabled={saving}>
+            Save channel details
+          </button>
+          <ModalCancel />
+        </div>
+      }
+    >
       <p>
         Details save immediately. Programming and playback keep their place.
       </p>
@@ -586,6 +817,8 @@ function ChannelDetailsEditor(
         }}
       >
         <Form
+          id={formId}
+          hideActions
           guardDraft={false}
           submit="Save channel details"
           onCancel={close}
@@ -691,15 +924,17 @@ function ProgramEditor(
     [previewEffective, setPreviewEffective] = useState<number | null>(null),
     [saved, setSaved] = useState<number | null>(null),
     [dirty, setDirty] = useState(false),
-    [commercialDirty, setCommercialDirty] = useState(false),
+    [rulesValid, setRulesValid] = useState(true),
+    [submissionError, setSubmissionError] = useState<unknown>(null),
     [commercialVersion, setCommercialVersion] = useState(0),
     [conflict, setConflict] = useState(false),
+    [reloading, setReloading] = useState(false),
     [latestReview, setLatestReview] = useState<{
       config: Programming | null;
       effectiveMs: number | null;
     } | null>(null);
   const expectedRevision = useRef<string | null>(null);
-  const hasChanges = dirty || commercialDirty;
+  const hasChanges = dirty;
   useDraftNavigation(hasChanges);
   const configRevision = useRef(0),
     previewRequest = useRef(0),
@@ -716,12 +951,12 @@ function ProgramEditor(
       expectedRevision.current = data.data.revisionId;
       setConflict(false);
       setLatestReview(null);
+      setSubmissionError(null);
       configRevision.current++;
       setPreview(null);
       setSaved(null);
       setDirty(Boolean(props.draftConfig && !data.data.config));
       setCommercialVersion((v) => v + 1);
-      setCommercialDirty(false);
       setConfig(
         data.data.config ??
           props.draftConfig ?? {
@@ -747,6 +982,13 @@ function ProgramEditor(
       );
     }
   }, [data.data, props.profileId, props.initialSelection, props.draftConfig]);
+  useEffect(() => {
+    if (!data.loading) setReloading(false);
+  }, [data.loading, data.data, data.error]);
+  const reloadProgramming = () => {
+    setReloading(true);
+    data.reload();
+  };
   const options = (library.data?.items ?? []).map((o) => ({
     ...o,
     label: o.title,
@@ -759,12 +1001,24 @@ function ProgramEditor(
           : o.kind,
     detail: o.kind,
   }));
+  const emptyGroups =
+    config?.groups.filter((group) =>
+      options.some(
+        (option) =>
+          JSON.stringify(option.selection) ===
+            JSON.stringify(group.selection) && option.available === 0,
+      ),
+    ) ?? [];
+  const noAvailableGroups = Boolean(
+    config?.groups.length && emptyGroups.length === config.groups.length,
+  );
   const update = (next: Programming) => {
     configRevision.current++;
     setConfig(next);
     setDirty(true);
     setPreview(null);
     setSaved(null);
+    setSubmissionError(null);
   };
   const checkConflict = (error: unknown, revision: number) => {
     if (
@@ -780,21 +1034,130 @@ function ProgramEditor(
     }
     throw error;
   };
+  const [publishing, setPublishing] = useState(false);
+  const publish = async () => {
+    if (!config || !rulesValid || noAvailableGroups) return;
+    setSubmissionError(null);
+    setPublishing(true);
+    try {
+      const revision = configRevision.current,
+        request = ++publicationRequest.current;
+      const r = await api<{
+        effectiveMs: number;
+        revisionId: string;
+      }>(`/api/channels/${props.channel.id}/programming`, "PUT", {
+        ...config,
+        expectedRevisionId: expectedRevision.current,
+      }).catch((error) => checkConflict(error, revision));
+      if (request === publicationRequest.current)
+        expectedRevision.current = r.revisionId;
+      if (
+        revision === configRevision.current &&
+        request === publicationRequest.current
+      ) {
+        setSaved(r.effectiveMs);
+        setDirty(false);
+        setPreview(null);
+        const { checkpointActions: _, ...published } = config;
+        setConfig(published);
+      }
+      props.onSaved();
+    } finally {
+      setPublishing(false);
+    }
+  };
   return (
     <Modal
       title={`Program ${props.channel.name}`}
-      onClose={() => {
+      closeDisabled={publishing}
+      footer={
+        config && (
+          <div className="actions">
+            <button
+              className="secondary"
+              disabled={
+                tab === "content" || publishing || data.loading || reloading
+              }
+              onClick={() =>
+                setTab(tab === "preview" ? "commercials" : "content")
+              }
+            >
+              Back
+            </button>
+            {saved ? null : tab === "preview" ? (
+              <Action
+                disabled={
+                  !config.groups.length ||
+                  !preview ||
+                  !rulesValid ||
+                  noAvailableGroups ||
+                  conflict ||
+                  publishing
+                }
+                task={publish}
+                onError={setSubmissionError}
+              >
+                Publish programming
+              </Action>
+            ) : (
+              <button
+                disabled={
+                  !config.groups.length ||
+                  publishing ||
+                  !rulesValid ||
+                  data.loading ||
+                  reloading
+                }
+                onClick={() =>
+                  setTab(tab === "content" ? "commercials" : "preview")
+                }
+              >
+                Next
+              </button>
+            )}
+            <ModalCancel>{saved ? "Done" : "Cancel"}</ModalCancel>
+          </div>
+        )
+      }
+      onClose={async () => {
         if (
           !hasChanges ||
-          window.confirm("Discard unpublished changes to this channel?")
+          (await confirmAction("Discard unpublished changes to this channel?"))
         )
           props.onClose();
       }}
     >
-      <Load {...data} retry={data.reload} />
+      <Load {...data} retry={reloadProgramming} />
       <Load {...library} retry={library.reload} />
+      <SubmissionErrorBox error={submissionError} focus={!publishing} />
+      {emptyGroups.map((group) => (
+        <section key={group.id} className="notice" role="alert">
+          <h3>
+            Content group {(config?.groups.indexOf(group) ?? 0) + 1} has no
+            available videos in the last scan
+          </h3>
+          <p>
+            {group.selection.type === "folder"
+              ? `${library.data?.sources.find((source) => source.id === ("sourceId" in group.selection ? group.selection.sourceId : undefined))?.name ?? "Source"} · ${group.selection.directory || "Entire source"}`
+              : selectionSummary(group.selection)}
+            . The folder may have moved or be empty. No replacement is chosen
+            automatically.
+          </p>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setTab("content");
+              setPicker(group.id);
+            }}
+          >
+            Choose replacement
+          </button>{" "}
+          <a href="#sources">Review sources and scan again</a>
+        </section>
+      ))}
       {config && (
-        <div>
+        <fieldset disabled={data.loading || reloading || publishing}>
           {conflict && (
             <section className="notice" role="alert">
               <h3>Channel changed elsewhere</h3>
@@ -807,11 +1170,11 @@ function ProgramEditor(
                 secondary
                 task={async () => {
                   if (
-                    window.confirm(
+                    await confirmAction(
                       "Discard this unpublished draft and load the latest programming?",
                     )
                   )
-                    data.reload();
+                    reloadProgramming();
                 }}
               >
                 Load latest programming
@@ -855,7 +1218,8 @@ function ProgramEditor(
                       JSON.stringify(o.selection) ===
                       JSON.stringify(g.selection),
                   )?.label ?? "Saved selection"}{" "}
-                  · {g.mode} · {g.episodesPerTurn ?? 1} episode(s) per turn
+                  · {g.mode} · {g.episodesPerTurn ?? 1}{" "}
+                  {(g.episodesPerTurn ?? 1) === 1 ? "video" : "videos"} per turn
                 </p>
               ))}
               {latestReview.config && (
@@ -881,8 +1245,8 @@ function ProgramEditor(
             </section>
           )}
           <p role="status" className="notice">
-            {commercialDirty
-              ? "Unapplied commercial inputs — retained across tabs. Apply these rules before preview or publication."
+            {!rulesValid
+              ? "Correct the highlighted commercial break positions before preview or publication."
               : saved
                 ? `Programming saved — effective ${new Date(saved).toLocaleString()}`
                 : preview
@@ -893,7 +1257,7 @@ function ProgramEditor(
                       ? "Published programming — edit and preview to make changes"
                       : "Unpublished channel — add content and preview before publishing"}
           </p>
-          <div className="tabs">
+          <div className="tabs" aria-label="Programming steps">
             {["content", "commercials", "preview"].map((t) => (
               <button
                 key={t}
@@ -901,6 +1265,7 @@ function ProgramEditor(
                 aria-pressed={tab === t}
                 onClick={() => setTab(t)}
               >
+                {["content", "commercials", "preview"].indexOf(t) + 1}.{" "}
                 {t[0]!.toUpperCase() + t.slice(1)}
               </button>
             ))}
@@ -930,7 +1295,7 @@ function ProgramEditor(
                     Change content selection
                   </button>
                   <Select
-                    label="Rotation"
+                    label="Play order"
                     value={g.mode}
                     onChange={(e) =>
                       update({
@@ -946,14 +1311,12 @@ function ProgramEditor(
                       })
                     }
                   >
-                    <option value="ordered">
-                      Ordered · keep episode sequence
-                    </option>
+                    <option value="ordered">In order</option>
                     <option value="shuffle">Shuffle · varied rotation</option>
                     <option value="random">Random · repeats possible</option>
                   </Select>
                   <Select
-                    label="Episodes per turn"
+                    label="Videos per turn"
                     value={g.episodesPerTurn ?? 1}
                     onChange={(e) =>
                       update({
@@ -1000,7 +1363,7 @@ function ProgramEditor(
                     <button
                       className="secondary"
                       disabled={i === 0}
-                      onClick={() => {
+                      onClick={async () => {
                         const groups = [...config.groups];
                         [groups[i - 1], groups[i]] = [
                           groups[i]!,
@@ -1033,6 +1396,8 @@ function ProgramEditor(
           {picker && (
             <SelectionPicker
               profileId={props.profileId}
+              identity={props.account.id}
+              version={props.version}
               {...(config.groups.find((g) => g.id === picker)
                 ? {
                     current: config.groups.find((g) => g.id === picker)!
@@ -1062,7 +1427,7 @@ function ProgramEditor(
                       ? [
                           ...config.groups,
                           {
-                            id: crypto.randomUUID(),
+                            id: eventId(),
                             mode: "ordered",
                             selection: o.selection,
                           },
@@ -1081,291 +1446,65 @@ function ProgramEditor(
             />
           )}
           <div hidden={tab !== "commercials"}>
-            <CommercialEligibility
+            <ProgrammingRules
+              key={commercialVersion}
               config={config}
-              profileId={props.profileId}
-              update={update}
+              sources={library.data?.sources ?? []}
+              pools={library.data?.items ?? []}
+              onChange={update}
+              onValidityChange={setRulesValid}
+              onChoosePool={() => setPicker("commercial")}
             />
-            <div onChangeCapture={() => setCommercialDirty(true)}>
-              <Form
-                guardDraft={false}
-                key={commercialVersion}
-                submit="Apply commercial rules"
-                onSave={async (d) => {
-                  const selected = value(d, "pool"),
-                    positions = value(d, "positions")
-                      .split(",")
-                      .map((v) => v.trim())
-                      .filter(Boolean)
-                      .map((v) => ({
-                        kind: value(d, "positionKind") as
-                          "percent" | "timestamp",
-                        value: Number(v),
-                      }));
-                  setCommercialDirty(false);
-                  const { commercialSelection: _, ...base } = config;
-                  update({
-                    ...base,
-                    disabledCommercialIds:
-                      selected === JSON.stringify(config.commercialSelection)
-                        ? (config.disabledCommercialIds ?? [])
-                        : [],
-                    ...(selected
-                      ? {
-                          commercialSelection: JSON.parse(
-                            selected,
-                          ) as Selection,
-                        }
-                      : {}),
-                    rules: {
-                      between: d.has("between"),
-                      positions,
-                      maxClips: number(d, "maxClips"),
-                      maxDurationMs: number(d, "maxDuration") * 1000,
-                      overflowPolicy: value(d, "overflowPolicy") as
-                        "skip" | "truncate",
-                      minRemainingMs: Math.round(
-                        number(d, "minRemaining") * 1000,
-                      ),
-                      repeatAllowance: number(d, "repeat"),
-                      maxPerBreak: number(d, "perBreak"),
-                      cooldownMs: number(d, "cooldown") * 1000,
-                      ...(number(d, "randomCount") > 0
-                        ? {
-                            random: {
-                              count: number(d, "randomCount"),
-                              minPercent: number(d, "minPercent"),
-                              maxPercent: number(d, "maxPercent"),
-                            },
-                          }
-                        : {}),
-                    },
-                  });
-                }}
-              >
-                <div className="two-col">
-                  <div>
-                    <h3>Make every break deliberate</h3>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={commercialDirty}
-                      onClick={() => setPicker("commercial")}
-                    >
-                      Find another commercial pool
-                    </button>
-                    {commercialDirty && (
-                      <p>
-                        Apply current commercial inputs before changing the
-                        pool.
-                      </p>
-                    )}
-                    <Select
-                      label="Commercial pool"
-                      name="pool"
-                      defaultValue={
-                        config.commercialSelection
-                          ? JSON.stringify(config.commercialSelection)
-                          : ""
-                      }
-                    >
-                      <option value="">No commercials</option>
-                      {config.commercialSelection &&
-                        !options.some(
-                          (o) =>
-                            JSON.stringify(o.selection) ===
-                            JSON.stringify(config.commercialSelection),
-                        ) && (
-                          <option
-                            value={JSON.stringify(config.commercialSelection)}
-                          >
-                            Saved pool
-                          </option>
-                        )}
-                      {options
-                        .filter((o) =>
-                          ["commercials", "collections", "videos"].includes(
-                            o.kind,
-                          ),
-                        )
-                        .map((o, n) => (
-                          <option key={n} value={JSON.stringify(o.selection)}>
-                            {o.label}
-                          </option>
-                        ))}
-                    </Select>
-                    <label className="check">
-                      <input
-                        type="checkbox"
-                        name="between"
-                        defaultChecked={config.rules.between}
-                      />
-                      Between programs
-                    </label>
-                    <Select
-                      label="Fixed position unit"
-                      name="positionKind"
-                      defaultValue={
-                        config.rules.positions[0]?.kind ?? "percent"
-                      }
-                    >
-                      <option value="percent">Percent of source program</option>
-                      <option value="timestamp">
-                        Milliseconds into source program
-                      </option>
-                    </Select>
-                    <Field
-                      label="Fixed positions"
-                      name="positions"
-                      defaultValue={config.rules.positions
-                        .map((p) => p.value)
-                        .join(", ")}
-                      hint="Comma-separated values, for example 25, 50, 75."
-                    />
-                    <Field
-                      label="Random break count"
-                      name="randomCount"
-                      type="number"
-                      min={0}
-                      max={100}
-                      defaultValue={config.rules.random?.count ?? 0}
-                    />
-                    <div className="two-col">
-                      <Field
-                        label="Minimum percent"
-                        name="minPercent"
-                        type="number"
-                        min={1}
-                        max={98}
-                        defaultValue={config.rules.random?.minPercent ?? 30}
-                      />
-                      <Field
-                        label="Maximum percent"
-                        name="maxPercent"
-                        type="number"
-                        min={2}
-                        max={99}
-                        defaultValue={config.rules.random?.maxPercent ?? 70}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <Field
-                      label="Maximum clips per break"
-                      name="maxClips"
-                      type="number"
-                      min={0}
-                      max={100}
-                      required
-                      defaultValue={config.rules.maxClips}
-                    />
-                    <Field
-                      label="Maximum break duration (seconds)"
-                      name="maxDuration"
-                      type="number"
-                      min={0}
-                      max={3600}
-                      required
-                      defaultValue={config.rules.maxDurationMs / 1000}
-                    />
-                    <Select
-                      label="When a commercial exceeds the remaining break"
-                      name="overflowPolicy"
-                      defaultValue={config.rules.overflowPolicy ?? "skip"}
-                    >
-                      <option value="truncate">
-                        Cut off at the end of the break
-                      </option>
-                      <option value="skip">
-                        Only play complete commercials
-                      </option>
-                    </Select>
-                    <Field
-                      label="Minimum remaining time to start a commercial (seconds)"
-                      name="minRemaining"
-                      type="number"
-                      min={0}
-                      max={3600}
-                      step={0.001}
-                      required
-                      defaultValue={
-                        (config.rules.minRemainingMs ?? 6000) / 1000
-                      }
-                      hint="In cutoff mode, more than this time must remain. At or below it, return to the show."
-                    />
-                    <Field
-                      label="Appearances per clip, per pool rotation"
-                      name="repeat"
-                      type="number"
-                      min={1}
-                      max={100}
-                      required
-                      defaultValue={config.rules.repeatAllowance}
-                    />
-                    <Field
-                      label="Maximum repeats of one clip in a break"
-                      name="perBreak"
-                      type="number"
-                      min={1}
-                      max={100}
-                      required
-                      defaultValue={config.rules.maxPerBreak}
-                    />
-                    <Field
-                      label="Cooldown between clip starts (seconds)"
-                      name="cooldown"
-                      type="number"
-                      min={0}
-                      max={604800}
-                      required
-                      defaultValue={config.rules.cooldownMs / 1000}
-                    />
-                    <p className="notice">
-                      Cutoff mode plays only the scheduled portion of the last
-                      commercial. Short remainders return to the show; repeat
-                      and cooldown limits still apply. Original files stay
-                      unchanged.
-                    </p>
-                  </div>
-                </div>
-              </Form>
-            </div>
           </div>
 
           {tab === "preview" && (
             <>
-              <p>
-                Preview resolves actual scheduled intervals. Publishing changes
-                an active channel after its current program and associated
-                breaks.
-              </p>
-              <Action
-                task={async () => {
-                  const revision = configRevision.current,
-                    request = ++previewRequest.current;
-                  setPreview(null);
-                  const result = await api<{
-                    entries: Entry[];
-                    diagnostics: BreakDiagnostic[];
-                    effectiveMs: number;
-                  }>(
-                    `/api/channels/${props.channel.id}/programming/preview?horizonMs=7200000`,
-                    "POST",
-                    { ...config, expectedRevisionId: expectedRevision.current },
-                  ).catch((error) => checkConflict(error, revision));
-                  if (
-                    revision === configRevision.current &&
-                    request === previewRequest.current
-                  ) {
-                    setPreview(result.entries);
-                    setDiagnostics(result.diagnostics);
-                    setPreviewEffective(result.effectiveMs);
+              {!saved && (
+                <p>
+                  Preview resolves actual scheduled intervals. Publishing
+                  changes an active channel after its current program and
+                  associated breaks.
+                </p>
+              )}
+              {!saved && (
+                <Action
+                  onError={setSubmissionError}
+                  task={async () => {
+                    setSubmissionError(null);
+                    const revision = configRevision.current,
+                      request = ++previewRequest.current;
+                    setPreview(null);
+                    const result = await api<{
+                      entries: Entry[];
+                      diagnostics: BreakDiagnostic[];
+                      effectiveMs: number;
+                    }>(
+                      `/api/channels/${props.channel.id}/programming/preview?horizonMs=7200000`,
+                      "POST",
+                      {
+                        ...config,
+                        expectedRevisionId: expectedRevision.current,
+                      },
+                    ).catch((error) => checkConflict(error, revision));
+                    if (
+                      revision === configRevision.current &&
+                      request === previewRequest.current
+                    ) {
+                      setPreview(result.entries);
+                      setDiagnostics(result.diagnostics);
+                      setPreviewEffective(result.effectiveMs);
+                    }
+                  }}
+                  disabled={
+                    !config.groups.length ||
+                    conflict ||
+                    !rulesValid ||
+                    noAvailableGroups
                   }
-                }}
-                disabled={!config.groups.length || conflict || commercialDirty}
-              >
-                Generate two-hour preview
-              </Action>
+                >
+                  Generate two-hour preview
+                </Action>
+              )}
               {preview && (
                 <>
                   <p className="notice">
@@ -1373,186 +1512,109 @@ function ProgramEditor(
                     {new Date(previewEffective!).toLocaleString()} after the
                     current program and its breaks.
                   </p>
+                  <Schedule
+                    entries={preview}
+                    sources={library.data?.sources ?? []}
+                  />
                   <BreakDiagnostics items={diagnostics} />
-                  <Schedule entries={preview} />
                 </>
               )}
             </>
           )}
-          <div className="actions editor-footer">
-            <Action
-              disabled={
-                !config.groups.length || !preview || commercialDirty || conflict
-              }
-              task={async () => {
-                const revision = configRevision.current,
-                  request = ++publicationRequest.current;
-                const r = await api<{
-                  effectiveMs: number;
-                  revisionId: string;
-                }>(`/api/channels/${props.channel.id}/programming`, "PUT", {
-                  ...config,
-                  expectedRevisionId: expectedRevision.current,
-                }).catch((error) => checkConflict(error, revision));
-                if (request === publicationRequest.current)
-                  expectedRevision.current = r.revisionId;
-                if (
-                  revision === configRevision.current &&
-                  request === publicationRequest.current
-                ) {
-                  setSaved(r.effectiveMs);
-                  setDirty(false);
-                  setPreview(null);
-                  const { checkpointActions: _, ...published } = config;
-                  setConfig(published);
-                }
-                props.onSaved();
-              }}
-            >
-              Publish programming
-            </Action>
-            <button className="secondary" onClick={() => setTab("preview")}>
-              Review schedule
-            </button>
-          </div>
           <p className="muted">
-            {commercialDirty
-              ? "Apply commercial rules before previewing or publishing."
-              : "Preview this draft before publishing. Original media stays in place."}
+            {!rulesValid
+              ? "Correct the highlighted commercial break positions before previewing or publishing."
+              : saved
+                ? `Programming saved. Effective ${new Date(saved).toLocaleString()} after the current program and its breaks. Choose Done to close, or edit again.`
+                : "Preview this draft before publishing. Original media stays in place."}
           </p>
-        </div>
+        </fieldset>
       )}
     </Modal>
   );
 }
-export function Schedule({ entries }: { entries: Entry[] }) {
+export function Schedule({
+  entries,
+  sources = [],
+}: {
+  entries: Entry[];
+  sources?: Source[];
+}) {
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [entries]);
+  const sourceNames = new Map(
+    sources.map((source) => [source.id, source.name]),
+  );
   return (
-    <div className="table-scroll">
+    <section aria-label="Schedule review">
       {entries.length > 0 && (
         <p>
-          Generated window: {new Date(entries[0]!.startMs).toLocaleString()} –{" "}
-          {new Date(entries.at(-1)!.endMs).toLocaleString()}. Rows show actual
-          scheduled durations.
+          Preview: {entries.length}{" "}
+          {entries.length === 1 ? "interval" : "intervals"} ·{" "}
+          {new Date(entries[0]!.startMs).toLocaleString()} –{" "}
+          {new Date(entries.at(-1)!.endMs).toLocaleString()}. Showing{" "}
+          {offset + 1}–{Math.min(offset + 20, entries.length)}. Continued
+          program portions resume after a commercial break.
         </p>
       )}
-      <table>
-        <thead>
-          <tr>
-            <th>Starts</th>
-            <th>Ends</th>
-            <th>Video</th>
-            <th>Type</th>
-            <th>Actual seconds</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.slice(0, 100).map((e) => (
-            <tr key={e.id}>
-              <td>
-                {new Date(e.startMs).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </td>
-              <td>
-                {new Date(e.endMs).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </td>
-              <td>{e.title ?? e.mediaId}</td>
-              <td>{e.kind}</td>
-              <td>
-                {((e.endMs - e.startMs) / 1000).toLocaleString(undefined, {
-                  maximumFractionDigits: 3,
-                })}
-              </td>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Starts</th>
+              <th>Ends</th>
+              <th>Video</th>
+              <th>Type</th>
+              <th>Duration</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-      {entries.length > 100 && <p>Showing the first 100 intervals.</p>}
-    </div>
-  );
-}
-
-function CommercialEligibility({
-  config,
-  profileId,
-  update,
-}: {
-  config: Programming;
-  profileId: string;
-  update: (next: Programming) => void;
-}) {
-  const [items, setItems] = useState<{ id: string; title: string }[] | null>(
-      null,
-    ),
-    [error, setError] = useState<unknown>(null);
-  const selection = JSON.stringify(config.commercialSelection);
-  useEffect(() => {
-    setItems(null);
-    setError(null);
-    if (!config.commercialSelection) return;
-    const controller = new AbortController();
-    void api<{ items: { id: string; title: string }[] }>(
-      `/api/profiles/${profileId}/selection`,
-      "POST",
-      config.commercialSelection,
-      controller.signal,
-    )
-      .then((data) => {
-        if (!controller.signal.aborted) setItems(data.items);
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setError(e);
-      });
-    return () => controller.abort();
-  }, [profileId, selection]);
-  if (!config.commercialSelection) return null;
-  const disabled = config.disabledCommercialIds ?? [];
-  return (
-    <section className="panel">
-      <h3>Commercial eligibility</h3>
-      <p>
-        Disable a commercial for this channel without moving its file. Preview
-        and publish to change future programming after the current program and
-        breaks; existing airings and paused sessions retain their choices.
-      </p>
-      <Load loading={!items && !error} error={error} />
-      {items && (
-        <>
-          <p>
-            {items.filter((i) => !disabled.includes(i.id)).length} eligible of{" "}
-            {items.length} available commercials. An empty pool returns to the
-            show without dead air.
-          </p>
-          <div className="commercial-eligibility">
-            {items.map((item) => (
-              <label className="check" key={item.id}>
-                <input
-                  type="checkbox"
-                  checked={!disabled.includes(item.id)}
-                  onChange={(event) =>
-                    update({
-                      ...config,
-                      disabledCommercialIds: event.target.checked
-                        ? disabled.filter((id) => id !== item.id)
-                        : [...disabled, item.id],
-                    })
-                  }
-                />
-                {item.title}
-              </label>
+          </thead>
+          <tbody>
+            {entries.slice(offset, offset + 20).map((entry) => (
+              <tr key={entry.id}>
+                <td>{timeWithSeconds(entry.startMs)}</td>
+                <td>{timeWithSeconds(entry.endMs)}</td>
+                <td>
+                  {entry.title ?? entry.mediaId}
+                  {entry.kind === "program" && entry.offsetMs > 0
+                    ? " (continued)"
+                    : ""}
+                  <MediaReferenceContext
+                    entry={entry}
+                    sourceNames={sourceNames}
+                  />
+                </td>
+                <td>
+                  {entry.kind === "commercial"
+                    ? "Commercial"
+                    : entry.offsetMs > 0
+                      ? `Program · resumes at ${duration(entry.offsetMs)}`
+                      : "Program"}
+                </td>
+                <td>{duration(entry.endMs - entry.startMs)}</td>
+              </tr>
             ))}
-          </div>
-        </>
+          </tbody>
+        </table>
+      </div>
+      {entries.length > 20 && (
+        <div className="actions">
+          <button
+            type="button"
+            className="secondary"
+            disabled={!offset}
+            onClick={() => setOffset((value) => Math.max(0, value - 20))}
+          >
+            Previous intervals
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={offset + 20 >= entries.length}
+            onClick={() => setOffset((value) => value + 20)}
+          >
+            Next intervals
+          </button>
+        </div>
       )}
     </section>
   );

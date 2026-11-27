@@ -14,6 +14,8 @@ import {
   requireProfile,
 } from "./security.js";
 import {
+  accountConfiguration,
+  saveAccountConfiguration,
   clearProfileUnlocks,
   changePassword,
   PairingService,
@@ -132,7 +134,7 @@ export function registerIdentity(
       csrfToken = randomBytes(32).toString("base64url");
     store.db
       .prepare(
-        "UPDATE sessions SET kind='browser',csrf_hash=? WHERE token_hash=?",
+        "UPDATE sessions SET kind='browser',label='Browser',csrf_hash=? WHERE token_hash=?",
       )
       .run(digest(csrfToken), digest(result.token));
     reply.header("Set-Cookie", cookie(result.token, 12 * 3600));
@@ -195,15 +197,35 @@ export function registerIdentity(
     const a = actor(request);
     return store.db
       .prepare(
-        "SELECT token_hash,expires_at,kind FROM sessions WHERE account_id=?",
+        "SELECT token_hash,expires_at,kind,label,created_ms,last_used_ms FROM sessions WHERE account_id=? ORDER BY COALESCE(last_used_ms,created_ms,0) DESC,expires_at DESC",
       )
       .all(a.id)
       .map((r) => ({
         id: r.token_hash,
         expiresAt: r.expires_at,
         kind: r.kind,
+        label: r.label,
+        createdMs: r.created_ms,
+        lastUsedMs: r.last_used_ms,
         current: r.token_hash === a.sessionHash,
       }));
+  });
+  app.patch("/api/auth/sessions/:sessionId", async (request, reply) => {
+    const account = actor(request),
+      { sessionId } = z
+        .object({ sessionId: z.string().regex(/^[a-f0-9]{64}$/) })
+        .parse(request.params),
+      { label } = z
+        .object({ label: z.string().trim().min(1).max(120) })
+        .strict()
+        .parse(request.body);
+    const result = store.db
+      .prepare(
+        "UPDATE sessions SET label=? WHERE token_hash=? AND account_id=?",
+      )
+      .run(label, sessionId, account.id);
+    invariant(result.changes === 1, 404, "Session not found");
+    return reply.code(204).send();
   });
   app.delete("/api/auth/sessions/:sessionId", async (request, reply) => {
     const a = actor(request),
@@ -222,6 +244,23 @@ export function registerIdentity(
         "SELECT id,username,role,disabled FROM accounts ORDER BY username",
       )
       .all();
+  });
+  app.get("/api/accounts/:accountId/configuration", async (request) => {
+    const { accountId } = z.object({ accountId: id }).parse(request.params);
+    return accountConfiguration(store, actor(request), accountId);
+  });
+  app.put("/api/accounts/:accountId/configuration", async (request) => {
+    const { accountId } = z.object({ accountId: id }).parse(request.params);
+    const input = z
+      .object({
+        revision: z.string().length(64),
+        role: z.enum(["admin", "editor", "viewer"]),
+        disabled: z.boolean(),
+        password: z.string().min(12).max(1024).optional(),
+      })
+      .strict()
+      .parse(request.body);
+    return saveAccountConfiguration(store, actor(request), accountId, input);
   });
   app.patch("/api/accounts/:accountId", async (request, reply) => {
     const a = actor(request),

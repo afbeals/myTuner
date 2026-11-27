@@ -32,3 +32,31 @@ export function BackgroundStatus() {
     </p>
   );
 }
+
+/** Per-task admission comes from the scheduler, rather than the global pause flag. */
+export type WorkAdmission = {
+  admission?: "waiting" | "active" | null;
+  waitingReason?: "playback" | "queue" | "playback-capacity" | null;
+};
+export function workAdmissionLabel(work: WorkAdmission) {
+  if (work.admission !== "waiting") return null;
+  return work.waitingReason === "playback"
+    ? "Waiting for playback"
+    : work.waitingReason === "playback-capacity"
+      ? "Waiting for playback capacity"
+      : "Waiting in queue";
+}
+export function WorkAdmissionNotice({ work }: { work: WorkAdmission }) {
+  const label = workAdmissionLabel(work);
+  if (!label) return null;
+  return (
+    <p className="notice" role="status">
+      {label}.{" "}
+      {work.waitingReason === "playback"
+        ? "Optional work resumes automatically when playback stops. You can close this dialog."
+        : work.waitingReason === "playback-capacity"
+          ? "Generation resumes automatically when encoder capacity is available."
+          : "Work starts automatically when earlier optional work finishes. You can close this dialog."}
+    </p>
+  );
+}

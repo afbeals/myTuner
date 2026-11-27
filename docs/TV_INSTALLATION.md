@@ -4,7 +4,7 @@
 
 **Primary target: the Sony Bravia running Android TV or Google TV. Secondary target: an Android-based Amazon Fire TV stick.** The intended result is a normal app in the device's Apps screen: open myTuner, select a profile, enter its PIN and watch its channel guide.
 
-**Version 0.2.0 has a native Android/Fire OS TV project and a locally built, debug-signed POC APK.** The artifact is `android/app/build/outputs/apk/debug/app-debug.apk` in this checkout. No app-store listing or public release download exists. The steps below apply to this build; device addresses/debugging ports remain examples. Local emulator evidence is separate from physical Bravia/Fire OS acceptance, which is still required. No physical TV or Unraid server was accessed or modified.
+**The current native Android/Fire OS TV project is version 0.3.0, version code 3.** A locally built, debug-signed POC APK is used for personal sideloading; current artifact evidence belongs in [VERIFICATION.md](VERIFICATION.md). The artifact is `android/app/build/outputs/apk/debug/app-debug.apk` in this checkout. No app-store listing or public release download exists. The steps below apply to this build; device addresses/debugging ports remain examples. Local emulator evidence is separate from physical Bravia/Fire OS acceptance, which is still required. No physical TV or Unraid server was accessed or modified.
 
 The Figma handoff is recorded in [DESIGN_REVIEW.md](DESIGN_REVIEW.md). Screen T0 covers server entry, T1 covers pairing, and T2–T4 cover profiles/PIN/guide. Installation happens before those screens. Producing a signed APK and validating these instructions on the actual devices are delivery requirements in [CHECKLIST.md](CHECKLIST.md).
 
@@ -43,6 +43,8 @@ Keep the release signing key outside Git and preserve it for updates. An APK mus
 
 ## Build the installable POC APK
 
+Use already-installed development tools; obtain the owner’s approval before installing or downloading additional host toolchains, SDK components or executables. Remaining emulator verification is deferred and these instructions do not resume it.
+
 This checkout uses Gradle 8.11.1 (wrapper included), Android Gradle Plugin 8.9.2, Kotlin 2.1.20 and Media3 1.6.1. Use Java 17 or 21, Android platform 35 and build-tools 35.0.0, plus current platform-tools. Set `ANDROID_HOME` to your SDK location or configure untracked `android/local.properties` with `sdk.dir`.
 
 ```sh
@@ -51,7 +53,7 @@ cd android
 cd .. # Return to the repository root for the following commands.
 ```
 
-Back at the repository root, the resulting installable file is `android/app/build/outputs/apk/debug/app-debug.apk` (or `app/build/outputs/apk/debug/app-debug.apk` relative to `android/`). It is debug-signed for personal POC sideloading. APK metadata: application ID **tv.mytuner.app**, version name **0.2.0**, version code **2**, minimum Android SDK **23**, target SDK **35**. It contains managed code without app-specific native ABI libraries. Platform decoder support must still be tested on each device.
+Back at the repository root, the resulting installable file is `android/app/build/outputs/apk/debug/app-debug.apk` (or `app/build/outputs/apk/debug/app-debug.apk` relative to `android/`). It is debug-signed for personal POC sideloading. APK metadata: application ID **tv.mytuner.app**, version name **0.3.0**, version code **3**, minimum Android SDK **23**, target SDK **35**. It contains managed code without app-specific native ABI libraries. Platform decoder support must still be tested on each device.
 
 Verify the actual artifact before copying/installing it:
 
@@ -60,15 +62,15 @@ shasum -a 256 android/app/build/outputs/apk/debug/app-debug.apk
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The locally verified 0.2.0/code 2 artifact after the final language-alias and local state/recovery corrections has SHA-256 `33638fd5c85d095fe98e7738b9702d2ed04dbda52c91e747f22f8db4cdeff36d`. `apksigner verify` passes v1/v2 signatures; signer certificate SHA-256 is `23f659f4da56763f641ee46182828bd9dd53190b2ae8befa8e6500c73f63cf31` (Android Debug). These values identify this local build only; a rebuild or different signer can change them.
+Historical evidence only: the earlier locally verified 0.2.0/code 2 artifact after the language-alias and local state/recovery corrections had SHA-256 `33638fd5c85d095fe98e7738b9702d2ed04dbda52c91e747f22f8db4cdeff36d`. `apksigner verify` passed v1/v2 signatures for that artifact; signer certificate SHA-256 is `23f659f4da56763f641ee46182828bd9dd53190b2ae8befa8e6500c73f63cf31` (Android Debug). These values identify that older local build only and must not be used to verify the current 0.3.0 artifact. The current locally verified 0.3.0/code 3 APK has SHA-256 `e59f9f0028cce15e4e895aa013807d1bee72aebbd02ccedc9ac01d9c65cf5f10`; `apksigner verify` passed v1/v2 signatures with the same local debug signer. See the dated UI/UX entry in VERIFICATION.md. A rebuild or different signer can change these values.
 
-Keep the same private debug keystore for POC updates; a CI-generated debug key may differ from this machine’s key. Preserve a stable private release key outside Git before distributing longer-lived builds. To release-sign without committing secrets: build `:app:assembleRelease`, align the unsigned release APK with SDK `zipalign`, then use `apksigner sign --ks /private/path/to/keystore --ks-key-alias <alias> --out /private/path/mytuner-tv-0.2.0.apk <aligned-apk>`. Let the signer prompt for passwords. Verify that artifact and record its own checksum; do not reuse the debug checksum or signing identity.
+Keep the same private debug keystore for POC updates; a CI-generated debug key may differ from this machine’s key. Preserve a stable private release key outside Git before distributing longer-lived builds. To release-sign without committing secrets: build `:app:assembleRelease`, align the unsigned release APK with SDK `zipalign`, then use `apksigner sign --ks /private/path/to/keystore --ks-key-alias <alias> --out /private/path/mytuner-tv-0.3.0.apk <aligned-apk>`. Let the signer prompt for passwords. Verify that artifact and record its own checksum; do not reuse the debug checksum or signing identity.
 
-The matching server/browser build is `npm run build`. Docker builds include `web-dist` and local fonts, and the Unraid WebUI link opens `/`. Build/tag scripts read version 0.2.0 from `package.json`. Set `MYTUNER_VERSION=0.2.0` in the deployment `.env` to select that accepted image tag; no published image or APK is implied by this document.
+The matching server/browser build is `npm run build`. Docker builds include `web-dist` and local fonts, and the Unraid WebUI link opens `/`. Build/tag scripts read version 0.3.0 from `package.json`. Use the exact accepted image tag in Unraid’s Repository field. The optional Compose route can set `MYTUNER_VERSION=0.3.0`; the preferred Docker-tab workflow needs no `.env`. No published image or APK is implied by this document.
 
 ## 1. Prepare the Unraid endpoint
 
-Use [DEPLOYMENT.md](DEPLOYMENT.md) for mounts, runtime identity, bootstrap and startup. Preserve data/generated/cache volumes and mount original media/commercials read-only. Bootstrap the first admin while the server is stopped, then start the normal container.
+Use [Unraid Docker-tab setup](UNRAID_DOCKER_TAB.md) for the preferred mounts, runtime identity, stopped-server bootstrap and startup sequence. [DEPLOYMENT.md](DEPLOYMENT.md) covers the optional Compose/CLI route. Preserve data/generated/cache volumes and mount original media/commercials read-only. Bootstrap the first admin while the server is stopped, then start the normal container.
 
 For the supplied bridge/port-mapping setup, myTuner listens on container port 8777 and publishes host port 8777 by default. The server address entered on the TV is:
 

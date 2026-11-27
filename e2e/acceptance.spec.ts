@@ -1,3 +1,4 @@
+import { selectInitialProfile, respondToNextConfirmation } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8791" });
@@ -9,8 +10,13 @@ async function login(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await expect(
-    page.getByRole("navigation", { includeHidden: true }),
+    page.getByRole("navigation", {
+      name: "Main navigation",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toBeAttached();
   await expect(page.getByLabel("Current profile")).not.toHaveValue("");
 }
@@ -35,7 +41,7 @@ const surfaces = [
     hash: "channels",
     path: /\/api\/admin\/channels$/,
     empty: { items: [] },
-    message: "Your network starts here",
+    message: "Create your first channel",
   },
   {
     hash: "library",
@@ -55,7 +61,7 @@ const surfaces = [
     hash: "accounts",
     path: /\/api\/accounts$/,
     empty: [],
-    message: "No accounts to display",
+    message: "No accounts",
   },
   {
     hash: "sources",
@@ -65,15 +71,21 @@ const surfaces = [
   },
   {
     hash: "subscriptions",
-    path: /\/api\/profiles\/[^/]+\/channels$/,
-    empty: [],
-    message: "No channels available",
+    path: /\/api\/profiles\/[^/]+\/subscription-configuration(?:\?.*)?$/,
+    empty: {
+      revision: "0".repeat(64),
+      items: [],
+      order: [],
+      total: 0,
+      hasMore: false,
+    },
+    message: "No eligible channels are available.",
   },
   {
     hash: "generated",
     path: /\/api\/admin\/generation$/,
     empty: [],
-    message: "No jobs yet",
+    message: "No work is waiting or running.",
   },
   {
     hash: "sessions",
@@ -217,6 +229,7 @@ test("profile loading and failed lookup never imply an empty account; retry and 
       .getByRole("button", { name: "Retry profile loading", exact: true })
       .click();
     await expect(page.getByLabel("Current profile")).not.toHaveValue("");
+    await selectInitialProfile(page);
     await page.route("**/api/admin/channels", (route) =>
       route.fulfill({ status: 401, json: { error: "Session expired" } }),
     );
@@ -254,7 +267,9 @@ test("offline and unreadable server responses have recoverable plain-language er
   await expect(page.getByRole("alert")).toContainText("unreadable response");
   mode = "normal";
   await page.getByRole("button", { name: "Try again", exact: true }).click();
-  await expect(page.getByText("Browser · This session")).toBeVisible();
+  await expect(
+    page.getByRole("heading").filter({ hasText: "This session" }),
+  ).toBeVisible();
 });
 
 test("account modal preserves failed drafts, guards close/navigation and restores keyboard focus", async ({
@@ -263,7 +278,7 @@ test("account modal preserves failed drafts, guards close/navigation and restore
   await login(page);
   await page.goto("/#accounts");
   const opener = page.getByRole("button", {
-    name: "+ Create account",
+    name: "Create account",
     exact: true,
   });
   await opener.click();
@@ -275,7 +290,10 @@ test("account modal preserves failed drafts, guards close/navigation and restore
   await dialog
     .getByLabel("Password", { exact: true })
     .fill("synthetic-draft-password");
-  page.once("dialog", (d) => d.dismiss());
+  await dialog
+    .getByLabel("Confirm password", { exact: true })
+    .fill("synthetic-draft-password");
+  await respondToNextConfirmation(page, false);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Username", { exact: true }).focus();
@@ -296,7 +314,7 @@ test("account modal preserves failed drafts, guards close/navigation and restore
       : route.continue(),
   );
   await dialog
-    .getByRole("button", { name: "Create account", exact: true })
+    .getByRole("button", { name: "Save account", exact: true })
     .click();
   await expect(dialog.getByRole("alert")).toContainText("already exists");
   await expect(dialog.getByLabel("Username", { exact: true })).toHaveValue(
@@ -308,7 +326,7 @@ test("account modal preserves failed drafts, guards close/navigation and restore
     await fits(page);
     await expect(dialog).toHaveScreenshot(`account-error-${width}.png`);
   }
-  page.once("dialog", (d) => d.accept());
+  await respondToNextConfirmation(page, true);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(opener).toBeFocused();
@@ -319,21 +337,33 @@ test("integration lookup failure prevents blank overwrites; retry restores saved
 }) => {
   await login(page);
   await page.goto("/#sources");
-  let phase = "failed";
-  await page.route("**/api/sources/*/integration", async (route) => {
+  let phase = "failed",
+    revision = "";
+  let saved: Record<string, unknown> | null = null;
+  await page.route("**/api/sources/*/configuration", async (route) => {
     if (phase === "failed")
       return route.fulfill({
         status: 503,
         json: { error: "Integration lookup unavailable" },
       });
-    if (route.request().method() === "GET")
+    if (route.request().method() === "GET") {
+      const response = await route.fetch(),
+        configuration = await response.json();
+      revision = configuration.revision;
       return route.fulfill({
+        response,
         json: {
-          provider: "sonarr",
-          url: "http://sonarr.local:8989",
-          mappings: [{ from: "/tv", to: "/media/shows" }],
+          ...configuration,
+          integration: {
+            provider: "sonarr",
+            url: "http://sonarr.local:8989",
+            hasApiKey: true,
+            mappings: [{ from: "/tv", to: "/media/shows" }],
+          },
         },
       });
+    }
+    saved = route.request().postDataJSON();
     return route.fulfill({
       status: 409,
       json: { error: "Integration changed. Review configuration." },
@@ -342,35 +372,53 @@ test("integration lookup failure prevents blank overwrites; retry restores saved
   await page
     .getByRole("button", { name: "Configure TV shows", exact: true })
     .click();
-  const dialog = page.getByRole("dialog");
+  const dialog = page.getByRole("dialog", {
+    name: "Configure TV shows",
+    exact: true,
+  });
   await expect(dialog.getByRole("alert")).toContainText(
     "Integration lookup unavailable",
   );
   await expect(
-    dialog.getByRole("button", {
-      name: "Save metadata integration",
-      exact: true,
-    }),
-  ).toHaveCount(0);
+    dialog.getByRole("button", { name: "Save configuration", exact: true }),
+  ).toBeDisabled();
   phase = "normal";
   await dialog.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(
-    dialog.getByLabel("Application URL", { exact: true }),
+    dialog.getByLabel("Sonarr address", { exact: true }),
   ).toHaveValue("http://sonarr.local:8989");
+  await expect(dialog.getByLabel("API key", { exact: true })).toHaveAttribute(
+    "placeholder",
+    /saved key/,
+  );
   await dialog
-    .getByLabel("Application URL", { exact: true })
+    .getByLabel("Sonarr address", { exact: true })
     .fill("http://replacement.local:8989");
   await dialog
     .getByLabel("API key", { exact: true })
     .fill("synthetic-never-persisted");
   await dialog
-    .getByRole("button", { name: "Save metadata integration", exact: true })
+    .getByRole("button", { name: "Save configuration", exact: true })
     .click();
   await expect(dialog.getByRole("alert")).toContainText("Integration changed");
+  expect(saved).toMatchObject({
+    revision,
+    integration: {
+      url: "http://replacement.local:8989",
+      apiKey: "synthetic-never-persisted",
+      mappings: [{ from: "/tv", to: "/media/shows" }],
+    },
+  });
+  expect(saved).toHaveProperty("subtitles");
+  expect(saved).toHaveProperty("metadataRoot");
+  expect(saved).toHaveProperty("intervalMs");
   await expect(
-    dialog.getByLabel("Application URL", { exact: true }),
+    dialog.getByLabel("Sonarr address", { exact: true }),
   ).toHaveValue("http://replacement.local:8989");
-  page.once("dialog", (d) => d.dismiss());
+  await expect(dialog.getByLabel("API key", { exact: true })).toHaveValue(
+    "synthetic-never-persisted",
+  );
+  await respondToNextConfirmation(page, false);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
 });
@@ -422,7 +470,7 @@ test("long profile/account/source text and 200-percent browser text remain usabl
       hash !== "accounts"
         ? page.getByRole("heading", { name: long, exact: true }).first()
         : page
-            .getByRole("cell", {
+            .getByRole("heading", {
               name: "unbrokensyntheticaccount".repeat(3).slice(0, 64),
             })
             .first(),
@@ -461,8 +509,12 @@ test("library clear filters restores results and refresh retains the last catalo
 }) => {
   await login(page);
   await page.goto("/#library");
-  const search = page.getByRole("textbox", { name: "Search", exact: true });
+  const search = page.getByRole("textbox", {
+    name: "Search catalog titles",
+    exact: true,
+  });
   await search.fill("absent-synthetic-title");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "No titles found" }),
   ).toBeVisible();
@@ -538,6 +590,8 @@ test("generation progress, deliberate cancellation and failed retry retain compl
     completed: 1,
     failed: status === "failed" ? 1 : 0,
     error: null,
+    current:
+      status === "running" ? { relativePath: "Another synthetic video" } : null,
     items: [
       {
         id: "done",
@@ -568,7 +622,7 @@ test("generation progress, deliberate cancellation and failed retry retain compl
   await page.route("**/api/admin/generation", (route) =>
     route.fulfill({ json: [details()] }),
   );
-  await page.route("**/api/generation/jobs/synthetic-job", (route) =>
+  await page.route("**/api/generation/jobs/synthetic-job?*", (route) =>
     route.fulfill({ json: details() }),
   );
   await page.route("**/api/generation/jobs/synthetic-job/cancel", (route) => {
@@ -584,7 +638,9 @@ test("generation progress, deliberate cancellation and failed retry retain compl
     });
   });
   await page.goto("/#generated");
-  await page.getByRole("button", { name: "View job", exact: true }).click();
+  await page
+    .getByRole("button", { name: "View running generation job", exact: true })
+    .click();
   const modal = page.getByRole("dialog", {
     name: "Generation progress",
     exact: true,
@@ -596,13 +652,15 @@ test("generation progress, deliberate cancellation and failed retry retain compl
   await expect(
     modal.getByRole("button", { name: "Cancel job", exact: true }),
   ).toBeFocused();
-  page.once("dialog", (d) => d.dismiss());
+  await respondToNextConfirmation(page, false);
   await modal.getByRole("button", { name: "Cancel job", exact: true }).click();
   expect(cancelRequests).toBe(0);
   await expect(modal).toContainText("running");
-  page.once("dialog", (d) => d.accept());
+  await respondToNextConfirmation(page, true);
   await modal.getByRole("button", { name: "Cancel job", exact: true }).click();
-  await expect(modal.getByRole("status")).toContainText("cancelled");
+  await expect(
+    modal.getByRole("status").filter({ hasText: "cancelled" }),
+  ).toBeVisible();
   expect(cancelRequests).toBe(1);
   await modal
     .getByRole("button", { name: "Retry unfinished outputs", exact: true })
@@ -659,6 +717,7 @@ for (const boundary of ["logout", "expiry"] as const) {
           {
             id: user === "Alice" ? aliceProfile : bobProfile,
             name: `${user} room`,
+            canManage: true,
             kind: "room",
             ownerAccountId: null,
             pinProtected: false,
@@ -673,6 +732,11 @@ for (const boundary of ["logout", "expiry"] as const) {
           offset: 0,
           limit: 50,
         });
+      if (path.endsWith("/library") && expire) {
+        expire = false;
+        user = null;
+        return reply({ error: "Session expired" }, 401);
+      }
       if (path.endsWith("/library"))
         return reply({
           sources:
@@ -687,6 +751,7 @@ for (const boundary of ["logout", "expiry"] as const) {
           movies: [],
           movieCollections: [],
         });
+      if (path.endsWith("/source-inspections")) return reply({ items: [] });
       if (path.endsWith("/collections")) return reply({ items: [] });
       if (path.endsWith("/selection"))
         return user === "Alice"
@@ -728,25 +793,58 @@ for (const boundary of ["logout", "expiry"] as const) {
       return reply({});
     });
     await page.goto("/#library");
-    await page
-      .getByRole("button", { name: "Open details", exact: true })
-      .click();
-    await page
-      .getByRole("button", { name: "Use whole selection in a channel" })
+    await selectInitialProfile(page, "Alice room");
+    await page.getByRole("button", { name: /^Open details for / }).click();
+    const details = page.getByRole("dialog", {
+      name: privateDirectory,
+      exact: true,
+    });
+    await details
+      .getByRole("checkbox", {
+        name: "Select Private clip · Private source",
+        exact: true,
+      })
+      .check();
+    await details
+      .getByRole("button", { name: "Add 1 video to tray", exact: true })
       .click();
     await expect(
-      page.getByRole("dialog", { name: "Create channel", exact: true }),
+      page.getByRole("heading", {
+        name: "Selection tray · 1 video",
+        exact: true,
+      }),
     ).toBeVisible();
-    await page.goBack();
+    await page
+      .getByRole("button", { name: "Create channel from tray", exact: true })
+      .click();
+    const aliceDraft = page.getByRole("dialog", {
+      name: "Create channel",
+      exact: true,
+    });
+    await aliceDraft
+      .getByLabel("Channel name", { exact: true })
+      .fill("Alice private draft");
+    await aliceDraft.getByRole("button", { name: "Next", exact: true }).click();
     await expect(
-      page.getByRole("heading", { name: "Your library", exact: true }),
+      aliceDraft.getByRole("heading", { name: "Content group 1", exact: true }),
+    ).toBeVisible();
+    await respondToNextConfirmation(page, true);
+    await aliceDraft
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+    await expect(aliceDraft).not.toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        name: "Selection tray · 1 video",
+        exact: true,
+      }),
     ).toBeVisible();
     if (boundary === "logout")
       await page.getByRole("button", { name: "Sign out", exact: true }).click();
     else {
       expire = true;
       await page
-        .getByRole("link", { name: "Subscriptions", exact: true })
+        .getByRole("button", { name: "Refresh view", exact: true })
         .click();
     }
     await page.getByLabel("Username", { exact: true }).fill("Bob");
@@ -754,23 +852,40 @@ for (const boundary of ["logout", "expiry"] as const) {
       .getByLabel("Password", { exact: true })
       .fill("synthetic-second-account-password");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await selectInitialProfile(page, "Bob room");
     await expect(page.getByLabel("Current profile")).toHaveValue(bobProfile);
-    await page.getByRole("link", { name: "Channels", exact: true }).click();
+    await page.getByRole("link", { name: "My Network", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Channels", exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(
+      page.getByRole("heading", {
+        name: "Selection tray · 0 videos",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("main")).not.toContainText(privateDirectory);
+    await expect(page.getByRole("main")).not.toContainText("Private clip");
     await page
-      .getByRole("button", { name: "+ Create channel", exact: true })
+      .getByRole("button", { name: "Create channel", exact: true })
       .click();
-    await page.getByLabel("Channel name", { exact: true }).fill("Bob channel");
-    await page.getByRole("button", { name: "Create & program" }).click();
-    const editor = page.getByRole("dialog", { name: "Program Bob channel" });
+    const editor = page.getByRole("dialog", {
+      name: "Create channel",
+      exact: true,
+    });
+    await editor
+      .getByLabel("Channel name", { exact: true })
+      .fill("Bob channel");
+    await editor.getByRole("button", { name: "Next", exact: true }).click();
     await expect(editor).toBeVisible();
     await expect(editor).not.toContainText(privateDirectory);
     await expect(
       editor.getByText("Content group 1", { exact: true }),
     ).toHaveCount(0);
+    await expect(
+      editor.getByRole("button", { name: "Next", exact: true }),
+    ).toBeDisabled();
     expect(bobPrivateResponses).toBe(0);
   });
 }

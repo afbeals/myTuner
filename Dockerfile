@@ -6,10 +6,11 @@ RUN npm ci
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 COPY web ./web
+COPY docs/UNRAID_DOCKER_TAB.md docs/TV_INSTALLATION.md docs/OPERATIONS.md docs/WINDOWS_DOCKER.md ./docs/
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-bookworm-slim AS runtime
-ARG APP_VERSION=0.2.2
+ARG APP_VERSION=0.3.0
 LABEL org.opencontainers.image.title="myTuner" org.opencontainers.image.version="${APP_VERSION}"
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*

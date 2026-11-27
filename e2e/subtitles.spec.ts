@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 test.use({ baseURL: "http://127.0.0.1:8786" });
@@ -8,6 +9,7 @@ async function setup(page: Page) {
     .getByLabel("Password", { exact: true })
     .fill("synthetic-browser-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
@@ -43,10 +45,7 @@ test("subtitle settings retain editable folders and failed drafts with guarded d
     name: "Configure TV shows",
     exact: true,
   });
-  const settings = modal.getByRole("region", {
-    name: "Subtitle search settings",
-  });
-  const folders = settings.getByLabel("Subtitle subdirectories", {
+  const folders = modal.getByLabel("Subtitle folder names", {
     exact: true,
   });
   await expect(folders).toBeEnabled();
@@ -54,11 +53,15 @@ test("subtitle settings retain editable folders and failed drafts with guarded d
   await folders.press("End");
   await folders.pressSequentially(", CustomCaptions");
   await expect(folders).toHaveValue("Subs, Subtitles, CustomCaptions");
-  page.once("dialog", (d) => d.dismiss());
   await page.keyboard.press("Escape");
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(modal).toBeVisible();
   await page.route(
-    "**/api/sources/*/subtitles",
+    "**/api/sources/*/configuration",
     (route) =>
       route.request().method() === "PUT"
         ? route.fulfill({
@@ -68,28 +71,34 @@ test("subtitle settings retain editable folders and failed drafts with guarded d
         : route.continue(),
     { times: 1 },
   );
-  await settings
-    .getByRole("button", { name: "Save subtitle settings", exact: true })
+  await modal
+    .getByRole("button", { name: "Save configuration", exact: true })
     .click();
-  await expect(settings.getByRole("alert")).toContainText(
+  await expect(modal.getByRole("alert")).toContainText(
     "Synthetic settings retry",
   );
   await expect(folders).toHaveValue("Subs, Subtitles, CustomCaptions");
-  await settings
-    .getByRole("button", { name: "Save subtitle settings", exact: true })
+  await modal
+    .getByRole("button", { name: "Save configuration", exact: true })
     .click();
-  await expect(settings.getByRole("status")).toContainText(
-    "Subtitle settings saved",
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByRole("status")).toContainText(
+    "Configuration saved: TV shows.",
   );
+  await page
+    .getByRole("button", { name: "Configure TV shows", exact: true })
+    .click();
+  await expect(folders).toHaveValue("Subs, Subtitles, CustomCaptions");
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1024 });
     await modal.evaluate((el) => {
-      const section = el.querySelector(
-        '[aria-label="Subtitle search settings"]',
+      const body = el.querySelector(".dialog-body")!;
+      const section = [...body.querySelectorAll("section")].find((item) =>
+        item.querySelector("h3")?.textContent?.startsWith("Subtitles"),
       )!;
-      el.scrollTop +=
+      body.scrollTop +=
         section.getBoundingClientRect().top -
-        el.getBoundingClientRect().top -
+        body.getBoundingClientRect().top -
         16;
     });
     await expect(modal).toHaveScreenshot(`subtitle-settings-${width}.png`);
@@ -124,16 +133,23 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
   await page
     .getByRole("article")
     .filter({ hasText: "Orbit Patrol" })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await page
-    .getByRole("button", { name: "Details for The Last Platform", exact: true })
+    .getByRole("button", {
+      name: "Details for The Last Platform · TV shows · Orbit.S01E01.mp4",
+      exact: true,
+    })
     .click();
   const modal = page.getByRole("dialog", {
     name: "Video details",
     exact: true,
   });
   const panel = modal.getByRole("region", { name: "Discovered subtitles" });
+  const association = modal.getByRole("group", {
+    name: "Subtitle association actions",
+    exact: true,
+  });
   await panel
     .getByRole("button", { name: "Check / Rescan subtitles", exact: true })
     .click();
@@ -142,10 +158,14 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
   await panel
     .getByLabel("Relative subtitle filename", { exact: true })
     .fill("Subs/English.srt");
-  page.once("dialog", (d) => d.dismiss());
   await page.keyboard.press("Escape");
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
   await expect(modal).toBeVisible();
-  await panel
+  await association
     .getByRole("button", { name: "Check subtitle candidate", exact: true })
     .click();
   await expect(panel).toContainText("ready to associate");
@@ -158,7 +178,7 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
       }),
     { times: 1 },
   );
-  await panel
+  await association
     .getByRole("button", { name: "Save subtitle association", exact: true })
     .click();
   await expect(panel.getByRole("alert")).toContainText(
@@ -171,14 +191,16 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
     await page.setViewportSize({ width, height: 1024 });
     await modal.evaluate((el) => {
       const section = el.querySelector('[aria-label="Discovered subtitles"]')!;
-      el.scrollTop +=
+      const body = el.querySelector(".dialog-body")!;
+      body.scrollTop +=
         section.getBoundingClientRect().top -
-        el.getBoundingClientRect().top -
+        body.getBoundingClientRect().top -
         16;
     });
     await expect(modal).toHaveScreenshot(`subtitle-discovery-${width}.png`);
     await modal.evaluate((el) => {
-      el.scrollTop = el.scrollHeight;
+      const body = el.querySelector(".dialog-body")!;
+      body.scrollTop = body.scrollHeight;
     });
     await expect(modal).toHaveScreenshot(`subtitle-manual-${width}.png`);
   }
@@ -189,7 +211,7 @@ test("subtitle discovery shows provenance and manual preview/save preserves draf
         .analyze()
     ).violations,
   ).toEqual([]);
-  await panel
+  await association
     .getByRole("button", { name: "Save subtitle association", exact: true })
     .click();
   await expect(panel).toContainText("Subtitle association saved");
@@ -438,9 +460,13 @@ test("output cleanup shows a readable review, guards confirmation, and recovers 
     )
       applies++;
   });
-  page.once("dialog", (d) => d.dismiss());
   await panel
     .getByRole("button", { name: "Apply reviewed cleanup", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Cancel", exact: true })
     .click();
   expect(applies).toBe(0);
   await page.route(
@@ -457,9 +483,13 @@ test("output cleanup shows a readable review, guards confirmation, and recovers 
           }),
     { times: 1 },
   );
-  page.once("dialog", (d) => d.accept());
   await panel
     .getByRole("button", { name: "Apply reviewed cleanup", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Continue", exact: true })
     .click();
   await expect(panel.getByRole("alert")).toContainText(
     "review reconciliation again",
@@ -484,9 +514,13 @@ test("output cleanup shows a readable review, guards confirmation, and recovers 
       r.status() === 200 &&
       !r.request().postDataJSON().dryRun,
   );
-  page.once("dialog", (d) => d.accept());
   await panel
     .getByRole("button", { name: "Apply reviewed cleanup", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .last()
+    .getByRole("button", { name: "Continue", exact: true })
     .click();
   await applied;
   await expect(panel.getByRole("status")).toContainText("Cleanup complete");

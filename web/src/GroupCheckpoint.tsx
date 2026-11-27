@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation";
 import { useState, useEffect } from "react";
 import { api } from "./api";
 import type { Media, Programming } from "./types";
@@ -16,7 +17,8 @@ export function GroupCheckpoint({
   ) => void;
 }) {
   const [choosing, setChoosing] = useState(false),
-    [search, setSearch] = useState("");
+    [search, setSearch] = useState(""),
+    [query, setQuery] = useState("");
   const [items, setItems] = useState<Media[] | null>(null),
     [error, setError] = useState<unknown>(null),
     [version, setVersion] = useState(0);
@@ -26,41 +28,41 @@ export function GroupCheckpoint({
     const controller = new AbortController();
     setItems(null);
     setError(null);
-    const timer = setTimeout(() => {
-      void api<{ items: Media[] }>(
-        `/api/profiles/${profileId}/checkpoint-options`,
-        "POST",
-        { selection: JSON.parse(signature), search },
-        controller.signal,
-      )
-        .then((r) => {
-          if (!controller.signal.aborted) setItems(r.items);
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) setError(e);
-        });
-    }, 200);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [choosing, profileId, signature, search, version]);
+    void api<{ items: Media[] }>(
+      `/api/profiles/${profileId}/checkpoint-options`,
+      "POST",
+      { selection: JSON.parse(signature), search: query },
+      controller.signal,
+    )
+      .then((result) => {
+        if (!controller.signal.aborted) setItems(result.items);
+      })
+      .catch((failure) => {
+        if (!controller.signal.aborted) setError(failure);
+      });
+    return () => controller.abort();
+  }, [choosing, profileId, signature, query, version]);
+  const submitSearch = () => {
+    setQuery(search);
+    setVersion((current) => current + 1);
+  };
+
   return (
     <section aria-label="Ordered group checkpoint">
       <p>
         {command
           ? command.action === "restart"
-            ? "Draft: restart this group at its first episode."
-            : "Draft: the selected episode plays next in this group."
+            ? "Draft: restart this group at its first video."
+            : "Draft: the selected video plays next in this group."
           : "Continue this group from its saved position."}{" "}
         Changes take effect after the current program and its breaks.
       </p>
       <div className="actions">
         <button
           className="secondary"
-          onClick={() => {
+          onClick={async () => {
             if (
-              window.confirm(
+              await confirmAction(
                 "Restart only this ordered group after the current program and breaks?",
               )
             )
@@ -70,7 +72,7 @@ export function GroupCheckpoint({
           Restart group
         </button>
         <button className="secondary" onClick={() => setChoosing(true)}>
-          Choose next episode
+          Choose next video
         </button>
         {command && (
           <button className="secondary" onClick={() => onChange(null)}>
@@ -79,19 +81,27 @@ export function GroupCheckpoint({
         )}
       </div>
       {choosing && (
-        <Modal
-          title="Choose the next episode"
-          onClose={() => setChoosing(false)}
-        >
+        <Modal title="Choose the next video" onClose={() => setChoosing(false)}>
           <p>
-            Only this group changes its next episode. Other groups and the
-            current airing keep their place.
+            Only this group changes its next video. Other groups and the current
+            airing keep their place.
           </p>
-          <Field
-            label="Find next episode"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <div className="actions">
+            <Field
+              label="Find next video"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  submitSearch();
+                }
+              }}
+            />
+            <button type="button" className="secondary" onClick={submitSearch}>
+              Search
+            </button>
+          </div>
           <Load
             loading={!items && !error}
             error={error}
@@ -102,10 +112,10 @@ export function GroupCheckpoint({
               <button
                 className="secondary"
                 key={m.id}
-                onClick={() => {
+                onClick={async () => {
                   if (
-                    window.confirm(
-                      `Make ${m.title} the next episode in this group?`,
+                    await confirmAction(
+                      `Make ${m.title} the next video in this group?`,
                     )
                   ) {
                     onChange({
@@ -129,7 +139,7 @@ export function GroupCheckpoint({
           )}
           <p>
             Up to 100 available matches. Narrow the search to find another
-            episode.
+            video.
           </p>
         </Modal>
       )}

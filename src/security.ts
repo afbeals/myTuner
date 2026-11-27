@@ -150,9 +150,9 @@ export async function login(
   const token = randomBytes(32).toString("base64url");
   store.db
     .prepare(
-      "INSERT INTO sessions(token_hash,account_id,expires_at) VALUES(?,?,?)",
+      "INSERT INTO sessions(token_hash,account_id,expires_at,label,created_ms,last_used_ms) VALUES(?,?,?,'API session',?,?)",
     )
-    .run(digest(token), current.id, now + 12 * 60 * 60 * 1000);
+    .run(digest(token), current.id, now + 12 * 60 * 60 * 1000, now, now);
   const { password_hash: _, ...account } = current;
   return { token, account };
 }
@@ -171,11 +171,21 @@ function authenticateHash(
 ): Account {
   const row = store.db
     .prepare(
-      `SELECT a.id,a.username,a.role,a.disabled,s.kind AS session_kind FROM sessions s JOIN accounts a ON a.id=s.account_id
+      `SELECT a.id,a.username,a.role,a.disabled,s.kind AS session_kind,s.last_used_ms FROM sessions s JOIN accounts a ON a.id=s.account_id
   WHERE s.token_hash=? AND s.expires_at>? AND a.disabled=0`,
     )
-    .get(tokenHash, now) as (Account & { session_kind: string }) | undefined;
+    .get(tokenHash, now) as
+    | (Account & { session_kind: string; last_used_ms?: number | null })
+    | undefined;
   invariant(row, 401, "Authentication required");
+  // Authentication is frequent; activity is written at most once per 15 minutes per session.
+  if (row.last_used_ms == null || now - row.last_used_ms >= 15 * 60_000)
+    store.db
+      .prepare(
+        "UPDATE sessions SET last_used_ms=? WHERE token_hash=? AND (last_used_ms IS NULL OR last_used_ms<=?)",
+      )
+      .run(now, tokenHash, now - 15 * 60_000);
+  delete row.last_used_ms;
   sessionKinds.set(row, row.session_kind);
   delete (row as Partial<typeof row>).session_kind;
   Object.defineProperty(row, "sessionHash", {

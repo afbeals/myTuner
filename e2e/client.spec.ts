@@ -1,3 +1,4 @@
+import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import type { Playback, Source } from "../web/src/types";
@@ -10,14 +11,23 @@ async function login(
   await page.getByLabel("Username", { exact: true }).fill(username);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await selectInitialProfile(page);
   await expect(
-    page.getByRole("navigation", { includeHidden: true }),
+    page.getByRole("navigation", {
+      name: "Main navigation",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toBeAttached();
 }
 async function navigate(page: Page, hash: string) {
   await page.goto(`/#${hash}`);
   await expect(
-    page.getByRole("navigation", { includeHidden: true }),
+    page.getByRole("navigation", {
+      name: "Main navigation",
+      exact: true,
+      includeHidden: true,
+    }),
   ).toBeAttached();
 }
 async function mutate(
@@ -44,6 +54,41 @@ async function mutate(
     },
     { path, method, body },
   );
+}
+async function openChannel(page: Page, name: string) {
+  await page.getByRole("button", { name, exact: true }).click();
+  await expect(page.locator(".channel-preview h2")).toHaveText(name);
+  return page.locator(".channel-preview");
+}
+async function commercialSource(page: Page, profileId: string) {
+  const sources: Source[] = await page.evaluate(async () =>
+    (await fetch("/api/sources")).json(),
+  );
+  let source = sources.find((candidate) => candidate.kind === "commercials");
+  if (!source) {
+    const shows = sources.find((candidate) => candidate.kind === "shows")!;
+    const added = await mutate(page, "/api/sources", "POST", {
+      name: "Synthetic commercials",
+      kind: "commercials",
+      recursive: true,
+      root: shows.rootPath!.replace(/\/media$/, "/commercials"),
+    });
+    expect(added.status).toBe(201);
+    source = added.data;
+    expect(
+      (await mutate(page, `/api/sources/${source!.id}/scan`, "POST", {}))
+        .status,
+    ).toBe(200);
+  }
+  expect(
+    (
+      await mutate(page, `/api/profiles/${profileId}/grants`, "POST", {
+        sourceId: source!.id,
+        subtree: "",
+      })
+    ).status,
+  ).toBe(201);
+  return source!;
 }
 async function proofChannel(page: Page, name: string) {
   await login(page);
@@ -153,14 +198,25 @@ test("approved browser foundation: sign-in, desktop/compact/narrow layouts, keyb
   await expect(
     page.getByRole("button", { name: "After School", exact: true }),
   ).toBeVisible();
+  await openChannel(page, "After School");
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({ width, height: 1024 });
-    await expect(
-      page
-        .getByText("Next · Maple Street", { exact: true })
-        .filter({ visible: true }),
-    ).toBeVisible();
+    await expect(page.locator(".channel-preview")).toContainText(
+      "Maple Street",
+    );
     await page.evaluate(() => document.fonts.ready);
+    if (width === 1440) {
+      const panel = page.locator(".channel-preview");
+      const details = await panel
+        .getByRole("button", { name: "Edit details", exact: true })
+        .boundingBox();
+      const programming = await panel
+        .getByRole("button", { name: "Edit programming", exact: true })
+        .boundingBox();
+      expect(details).not.toBeNull();
+      expect(programming).not.toBeNull();
+      expect(details!.y).toBeCloseTo(programming!.y, 1);
+    }
     await expect(page).toHaveScreenshot(`channels-${width}.png`, {
       fullPage: true,
     });
@@ -199,28 +255,44 @@ test("library whole-show selection → channel programming → preview/publish �
   await page
     .getByLabel("Current profile")
     .selectOption({ label: "Living Room" });
+  const profileId = await page.getByLabel("Current profile").inputValue();
+  const commercials = await commercialSource(page, profileId);
   await navigate(page, "library");
   await page
     .getByRole("article")
     .filter({
       has: page.getByRole("heading", { name: "Orbit Patrol", exact: true }),
     })
-    .getByRole("button", { name: "Open details" })
+    .getByRole("button", { name: /^Open details for / })
     .click();
   await expect(page.getByRole("dialog")).toContainText("The Last Platform");
   await page
-    .getByRole("button", { name: "Use whole selection in a channel" })
+    .getByRole("button", {
+      name: "Program this whole show or season in a channel",
+    })
     .click();
-  await page.getByLabel("Channel name", { exact: true }).fill("POC rotation");
-  await page.getByRole("button", { name: "Create & program" }).click();
-  await expect(page.getByRole("dialog")).toContainText("Content group 1");
-  await page.getByRole("button", { name: "Commercials", exact: true }).click();
-  const overflow = page.getByLabel(
-      "When a commercial exceeds the remaining break",
-    ),
-    minimum = page.getByLabel(
-      "Minimum remaining time to start a commercial (seconds)",
-    );
+  const wizard = page.getByRole("dialog", {
+    name: "Create channel",
+    exact: true,
+  });
+  await wizard.getByLabel("Channel name", { exact: true }).fill("POC rotation");
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(wizard).toContainText("Content group 1");
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard.getByLabel("Commercial pool", { exact: true }).selectOption(
+    JSON.stringify({
+      type: "folder",
+      sourceId: commercials.id,
+      directory: "",
+      recursive: true,
+    }),
+  );
+  const overflow = wizard.getByLabel("When a commercial is too long", {
+      exact: true,
+    }),
+    minimum = wizard.getByLabel("Minimum remaining break time (seconds)", {
+      exact: true,
+    });
   await expect(overflow).toHaveValue("truncate");
   await expect(minimum).toHaveValue("6");
   await page.setViewportSize({ width: 1440, height: 1024 });
@@ -230,16 +302,19 @@ test("library whole-show selection → channel programming → preview/publish �
   await overflow.selectOption("skip");
   await overflow.selectOption("truncate");
   await minimum.fill("6.007");
-  await page.getByRole("button", { name: "Apply commercial rules" }).click();
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
-  await page.getByRole("button", { name: "Generate two-hour preview" }).click();
-  await expect(page.getByRole("dialog").getByRole("table")).toBeVisible();
-  await page.getByRole("button", { name: "Publish programming" }).click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard
+    .getByRole("button", { name: "Generate preview", exact: true })
+    .click();
+  await expect(wizard.getByRole("table")).toBeVisible();
+  await wizard
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
+  await expect(wizard).not.toBeVisible();
   await expect(
     page
-      .getByRole("dialog")
       .getByRole("status")
-      .filter({ hasText: "Programming saved" }),
+      .filter({ hasText: "Channel created and published: POC rotation" }),
   ).toBeVisible();
   const saved = await page.evaluate(async () => {
     const channels = await (await fetch("/api/admin/channels")).json();
@@ -252,8 +327,10 @@ test("library whole-show selection → channel programming → preview/publish �
   });
   expect(saved.rules.overflowPolicy).toBe("truncate");
   expect(saved.rules.minRemainingMs).toBe(6007);
-  await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.getByRole("button", { name: "Add to profile guide" }).click();
+  expect(saved.groups[0].selection.type).toBe("show");
+  await page
+    .getByRole("button", { name: "Add to profile guide", exact: true })
+    .click();
   await navigate(page, "watch");
   await expect(
     page.getByRole("article").filter({ hasText: "POC rotation" }),
@@ -322,11 +399,14 @@ test("account/profile permissions, source scanning, pairing approval and generat
     .getByLabel("Password", { exact: true })
     .fill("synthetic-account-password");
   await page
+    .getByLabel("Confirm password", { exact: true })
+    .fill("synthetic-account-password");
+  await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Create account", exact: true })
+    .getByRole("button", { name: "Save account", exact: true })
     .click();
   await expect(
-    page.getByRole("cell", { name: "new-person", exact: true }),
+    page.getByRole("heading", { name: "new-person", exact: true }),
   ).toBeVisible();
   await navigate(page, "profiles");
   await page.getByRole("button", { name: "Create profile" }).click();
@@ -340,10 +420,18 @@ test("account/profile permissions, source scanning, pairing approval and generat
     page.getByRole("heading", { name: "Den", exact: true }),
   ).toBeVisible();
   await navigate(page, "sources");
-  await page.getByRole("button", { name: "Scan & refresh metadata" }).click();
+  const tvSource = page.locator("section.panel").filter({
+    has: page.getByRole("heading", { name: "TV shows", exact: true }),
+  });
+  await tvSource
+    .getByRole("button", { name: "Scan and refresh", exact: true })
+    .click();
+  const scan = page.getByRole("dialog", { name: "Scan TV shows", exact: true });
+  await scan.getByRole("button", { name: "Start scan", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Last scan result" }),
+    scan.getByRole("heading", { name: "Scan completed", exact: true }),
   ).toBeVisible();
+  await scan.getByRole("button", { name: "Close dialog", exact: true }).click();
   await navigate(page, "connect-tv");
   const pair = await (
     await request.post("/api/auth/pairings", {
@@ -356,7 +444,9 @@ test("account/profile permissions, source scanning, pairing approval and generat
     page.getByRole("region", { name: "Review TV approval" }),
   ).toContainText("Synthetic TV");
   await page.getByRole("button", { name: "Approve TV", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("TV approved");
+  await expect(
+    page.getByRole("heading", { name: "TV approved", exact: true }),
+  ).toBeVisible();
   const approved = await (
     await request.post("/api/auth/pairings/poll", {
       data: { deviceCode: pair.deviceCode },
@@ -368,6 +458,9 @@ test("account/profile permissions, source scanning, pairing approval and generat
   });
   expect(unauthorized.status()).toBe(403);
   await navigate(page, "generated");
+  await page
+    .getByLabel("Source", { exact: true })
+    .selectOption({ label: "TV shows" });
   await page.getByRole("button", { name: "Preview scope" }).click();
   await expect(page.getByRole("dialog")).toContainText("2 files");
   await page.getByRole("button", { name: "Start generation" }).click();
@@ -413,19 +506,57 @@ test("collections select catalog references and channel labels allow optional ov
     .click();
   const modal = page.getByRole("dialog");
   await modal.getByLabel("Collection name").fill("Weekend mix");
-  await modal.getByRole("checkbox").nth(0).check();
-  await modal.getByRole("checkbox").nth(1).check();
+  await modal
+    .getByRole("checkbox", {
+      name: "Include The Last Platform · TV shows · Orbit.S01E01.mp4",
+      exact: true,
+    })
+    .check();
+  await modal
+    .getByRole("checkbox", {
+      name: "Include Maple Street · TV shows · Orbit.S01E02.mp4",
+      exact: true,
+    })
+    .check();
   await modal.getByRole("button", { name: "Save collection" }).click();
   await page.getByRole("button", { name: "Collections", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Weekend mix" }),
   ).toBeVisible();
   await navigate(page, "channels");
-  await page.getByRole("button", { name: "Create channel" }).click();
+  await page
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
   await page.getByLabel("Channel name", { exact: true }).fill("Movie Hour");
   await page.getByLabel("Short name (optional)").fill("Cinema");
-  await page.getByRole("button", { name: "Create & program" }).click();
-  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  const wizard = page.getByRole("dialog", {
+    name: "Create channel",
+    exact: true,
+  });
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard
+    .getByRole("button", { name: "Add content group", exact: true })
+    .click();
+  const picker = page.getByRole("dialog", {
+    name: "Choose programming content",
+    exact: true,
+  });
+  await picker
+    .getByRole("button", { name: "Select Orbit Patrol", exact: true })
+    .click();
+  await picker
+    .getByRole("button", { name: "Use selection", exact: true })
+    .click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard
+    .getByRole("button", { name: "Generate preview", exact: true })
+    .click();
+  await expect(wizard.getByRole("table")).toBeVisible();
+  await wizard
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
+  await expect(wizard).not.toBeVisible();
   await page
     .locator(".channel-preview")
     .getByRole("button", { name: "Edit details", exact: true })
@@ -499,25 +630,7 @@ test("oversized commercial plays as bounded HLS and returns to the program sourc
     (await fetch("/api/sources")).json(),
   );
   const shows = sources.find((s) => s.kind === "shows")!;
-  const added = await mutate(page, "/api/sources", "POST", {
-    name: "Synthetic commercials",
-    kind: "commercials",
-    recursive: true,
-    root: shows.rootPath!.replace(/\/media$/, "/commercials"),
-  });
-  expect(added.status).toBe(201);
-  const adSource = added.data.id;
-  expect(
-    (await mutate(page, `/api/sources/${adSource}/scan`, "POST", {})).status,
-  ).toBe(200);
-  expect(
-    (
-      await mutate(page, `/api/profiles/${profileId}/grants`, "POST", {
-        sourceId: adSource,
-        subtree: "",
-      })
-    ).status,
-  ).toBe(201);
+  const adSource = (await commercialSource(page, profileId)).id;
   const selected = await mutate(
     page,
     `/api/profiles/${profileId}/selection`,
@@ -596,7 +709,9 @@ test("oversized commercial plays as bounded HLS and returns to the program sourc
     .click();
   const session: Playback = await (await joined).json();
   await expect(
-    page.getByRole("heading", { name: "Synthetic-ad", exact: true }),
+    page
+      .locator(".player-overlay")
+      .getByRole("heading", { name: "Synthetic-ad", exact: true }),
   ).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("main")).toContainText("Compatible HLS stream");
   await expect
@@ -756,7 +871,9 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
     .filter({ hasText: "Recovery proof" })
     .getByRole("button", { name: "Watch live" })
     .click();
-  await expect(page.getByRole("status")).toContainText("Synthetic join outage");
+  await expect(page.locator(".video-status")).toContainText(
+    "Synthetic join outage",
+  );
   const retriedJoin = page.waitForResponse(
     (r) =>
       r.url().endsWith("/api/playback/sessions") &&
@@ -782,7 +899,9 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
       });
     } else await route.continue();
   });
-  await expect(page.getByRole("status")).toContainText("Synthetic poll outage");
+  await expect(page.locator(".video-status")).toContainText(
+    "Synthetic poll outage",
+  );
   await expect
     .poll(() =>
       page
@@ -820,7 +939,7 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
     } else await route.continue();
   });
   await page.locator("video").dispatchEvent("error");
-  await expect(page.getByRole("status")).toContainText(
+  await expect(page.locator(".video-status")).toContainText(
     "Synthetic delivery outage",
   );
   for (let poll = 0; poll < 2; poll++) {
@@ -833,7 +952,7 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
     expect(((await healthy.json()) as Playback).playback!.entry.id).toBe(
       outageEntryId,
     );
-    await expect(page.getByRole("status")).toContainText(
+    await expect(page.locator(".video-status")).toContainText(
       "Synthetic delivery outage",
     );
   }
@@ -848,25 +967,34 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
   await expect(
     page.getByRole("button", { name: "Retry playback" }),
   ).toHaveCount(0);
+  const recoveryPool = await commercialSource(page, profileId);
+  const recoverySelection = {
+    type: "folder",
+    sourceId: recoveryPool.id,
+    directory: "",
+    recursive: true,
+  };
   await navigate(page, "channels");
-  const row = page.getByRole("row").filter({
-    has: page.getByRole("button", { name: "Recovery proof", exact: true }),
-  });
-  await row
+  const previewPanel = await openChannel(page, "Recovery proof");
+  await previewPanel
     .getByRole("button", { name: "Edit programming", exact: true })
     .click();
-  await page.getByRole("button", { name: "Commercials", exact: true }).click();
-  await expect(page.getByLabel("Maximum clips per break")).toHaveValue("0");
-  await expect(page.getByLabel("Maximum break duration (seconds)")).toHaveValue(
+  await page
+    .getByRole("button", { name: "2. Commercials", exact: true })
+    .click();
+  await page
+    .getByLabel("Commercial pool", { exact: true })
+    .selectOption(JSON.stringify(recoverySelection));
+  await expect(page.getByLabel("Maximum commercials per break")).toHaveValue(
+    "0",
+  );
+  await expect(page.getByLabel("Maximum break length (seconds)")).toHaveValue(
     "0",
   );
   await page
-    .getByLabel("When a commercial exceeds the remaining break")
+    .getByLabel("When a commercial is too long")
     .selectOption("truncate");
-  await page
-    .getByLabel("Minimum remaining time to start a commercial (seconds)")
-    .fill("5");
-  await page.getByRole("button", { name: "Apply commercial rules" }).click();
+  await page.getByLabel("Minimum remaining break time (seconds)").fill("5");
   let releasePreview!: () => void, previewStarted!: () => void;
   const held = new Promise<void>((resolve) => {
     releasePreview = resolve;
@@ -884,19 +1012,19 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
     },
     { times: 1 },
   );
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "3. Preview", exact: true }).click();
   await page.getByRole("button", { name: "Generate two-hour preview" }).click();
   await started;
-  await page.getByRole("button", { name: "Content", exact: true }).click();
+  await page.getByRole("button", { name: "1. Content", exact: true }).click();
   await page
-    .getByRole("combobox", { name: "Rotation", exact: true })
+    .getByRole("combobox", { name: "Play order", exact: true })
     .selectOption("shuffle");
   const stale = page.waitForResponse(
     (r) => r.url().includes("/programming/preview") && r.ok(),
   );
   releasePreview();
   await stale;
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "3. Preview", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("table")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Publish programming" }),
@@ -918,6 +1046,7 @@ test("playback recovers a failed poll, retains delivery errors until retry, and 
   expect(saved.rules.maxClips).toBe(0);
   expect(saved.rules.maxDurationMs).toBe(0);
   expect(saved.rules.minRemainingMs).toBe(5000);
+  expect(saved.commercialSelection).toEqual(recoverySelection);
   expect(saved.groups[0].mode).toBe("shuffle");
 });
 
@@ -1052,14 +1181,11 @@ test("late publication success cannot mark a newer draft saved", async ({
   // API fixture writes bypass the manager's refresh signal; remount its catalog.
   await navigate(page, "watch");
   await navigate(page, "channels");
-  await page
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("button", { name: "Publication proof", exact: true }),
-    })
+  const previewPanel = await openChannel(page, "Publication proof");
+  await previewPanel
     .getByRole("button", { name: "Edit programming", exact: true })
     .click();
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "3. Preview", exact: true }).click();
   await page.getByRole("button", { name: "Generate two-hour preview" }).click();
   await expect(page.getByRole("dialog").getByRole("table")).toBeVisible();
   let release!: () => void,
@@ -1086,10 +1212,15 @@ test("late publication success cannot mark a newer draft saved", async ({
   try {
     await page.getByRole("button", { name: "Publish programming" }).click();
     await pending;
-    await page.getByRole("button", { name: "Content", exact: true }).click();
-    await page
-      .getByRole("combobox", { name: "Rotation", exact: true })
-      .selectOption("shuffle");
+    await expect(
+      page.getByRole("button", { name: "1. Content", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page
+        .getByRole("dialog")
+        .locator(".dialog-footer")
+        .getByRole("button", { name: "Working…", exact: true }),
+    ).toBeDisabled();
     const finished = page.waitForResponse(
       (r) =>
         r.url().endsWith(`/api/channels/${channelId}/programming`) &&
@@ -1099,16 +1230,28 @@ test("late publication success cannot mark a newer draft saved", async ({
     release();
     await finished;
     await expect(
-      page.getByRole("button", { name: "Publish programming" }),
-    ).toBeDisabled();
+      page
+        .getByRole("dialog")
+        .getByRole("status")
+        .filter({ hasText: "Programming saved" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "1. Content", exact: true }).click();
+    await page
+      .getByRole("combobox", { name: "Play order", exact: true })
+      .selectOption("shuffle");
     await expect(
       page
         .getByRole("dialog")
         .getByRole("status")
         .filter({ hasText: "Programming saved" }),
     ).toHaveCount(0);
+    await page.getByRole("button", { name: "3. Preview", exact: true }).click();
     await expect(
-      page.getByRole("combobox", { name: "Rotation", exact: true }),
+      page.getByRole("button", { name: "Publish programming", exact: true }),
+    ).toBeDisabled();
+    await page.getByRole("button", { name: "1. Content", exact: true }).click();
+    await expect(
+      page.getByRole("combobox", { name: "Play order", exact: true }),
     ).toHaveValue("shuffle");
     expect(
       await page.evaluate(
@@ -1118,7 +1261,7 @@ test("late publication success cannot mark a newer draft saved", async ({
         channelId,
       ),
     ).toBe("ordered");
-    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    await page.getByRole("button", { name: "3. Preview", exact: true }).click();
     await page
       .getByRole("button", { name: "Generate two-hour preview" })
       .click();
@@ -1143,7 +1286,7 @@ test("late publication success cannot mark a newer draft saved", async ({
   }
 });
 
-test("library filename search finds the containing show and retains whole-show selection", async ({
+test("library explicit filename search finds exact videos and retains whole-show selection", async ({
   page,
 }) => {
   await login(page);
@@ -1152,23 +1295,64 @@ test("library filename search finds the containing show and retains whole-show s
     .selectOption({ label: "Living Room" });
   await navigate(page, "library");
   await page
-    .getByRole("textbox", { name: "Search", exact: true })
+    .getByRole("button", { name: "Folders and file names", exact: true })
+    .click();
+  const browser = page.getByRole("region", {
+    name: "Folder and filename search",
+    exact: true,
+  });
+  await browser.getByLabel("Match", { exact: true }).selectOption("files");
+  await browser
+    .getByLabel("Find folders or files", { exact: true })
     .fill("Orbit.S01E01.mp4");
+  await browser.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(browser.getByRole("article")).toHaveCount(1);
+  await expect(browser.getByRole("article")).toContainText("Orbit.S01E01.mp4");
+  await browser
+    .getByRole("button", {
+      name: "Add file TV shows · Orbit.S01E01.mp4",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Selection tray · 1 video",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Shows, movies and collections", exact: true })
+    .click();
+  await page
+    .getByLabel("Search catalog titles", { exact: true })
+    .fill("Orbit Patrol");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
   const show = page.getByRole("article").filter({
-    has: page.getByRole("heading", { name: /^Orbit(?: Patrol)?$/ }),
+    has: page.getByRole("heading", { name: "Orbit Patrol", exact: true }),
   });
   await expect(show).toBeVisible();
-  await show.getByRole("button", { name: "Open details" }).click();
+  await show.getByRole("button", { name: /^Open details for / }).click();
   await expect(
     page.getByRole("dialog").getByRole("checkbox", { name: /^Select / }),
   ).toHaveCount(2);
-  await page.getByRole("button", { name: "Close dialog" }).click();
-  await page
-    .getByRole("textbox", { name: "Search", exact: true })
-    .fill("nonexistent-file-unique.mp4");
   await expect(
-    page.getByRole("heading", { name: "No titles found" }),
-  ).toBeVisible();
+    page.getByRole("button", {
+      name: "Program this whole show or season in a channel",
+      exact: true,
+    }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Folders and file names", exact: true })
+    .click();
+  // Switching browser modes remounts the folder/file picker with its defaults.
+  await browser.getByLabel("Match", { exact: true }).selectOption("files");
+  await browser
+    .getByLabel("Find folders or files", { exact: true })
+    .fill("nonexistent-file-unique.mp4");
+  await browser.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(browser).toContainText("No matching files");
+  await expect(browser.getByRole("article")).toHaveCount(0);
 });
 
 test("browser fullscreen retains active captions, playback controls and exit behavior", async ({
@@ -1263,12 +1447,13 @@ test("delayed account choices cannot silently clear a room profile owner on save
     await page
       .getByRole("button", { name: "Manage Living Room", exact: true })
       .click();
-    await expect(
-      page.getByRole("button", { name: "Save profile", exact: true }),
-    ).toHaveCount(0);
-    release();
-    await expect(page.getByRole("combobox", { name: /^Owner/ })).toHaveValue(
-      original.ownerAccountId,
+    await expect(page.getByLabel("Profile name", { exact: true })).toHaveValue(
+      original.name,
+    );
+    const saved = page.waitForRequest(
+      (request) =>
+        request.url().endsWith(`/api/profiles/${original.id}/configuration`) &&
+        request.method() === "PUT",
     );
     await page
       .getByRole("textbox", { name: "Profile name", exact: true })
@@ -1276,6 +1461,10 @@ test("delayed account choices cannot silently clear a room profile owner on save
     await page
       .getByRole("button", { name: "Save profile", exact: true })
       .click();
+    expect((await saved).postDataJSON().ownerAccountId).toBe(
+      original.ownerAccountId,
+    );
+    release();
     await expect
       .poll(async () =>
         page.evaluate(async (id) => {
@@ -1300,16 +1489,11 @@ test("reopening a renamed channel editor retains saved name visibility and short
   page,
 }) => {
   const { channelId } = await proofChannel(page, "Saved identity proof");
-  await navigate(page, "library");
+  // Library and Channels share one mounted page; leave it to refresh API fixtures.
+  await navigate(page, "profiles");
   await navigate(page, "channels");
-  await page
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("button", {
-        name: "Saved identity proof",
-        exact: true,
-      }),
-    })
+  const previewPanel = await openChannel(page, "Saved identity proof");
+  await previewPanel
     .getByRole("button", { name: "Edit details", exact: true })
     .click();
   await page
@@ -1405,9 +1589,10 @@ test("management now-next advances while idle and refreshes coverage without los
     }
     await route.fulfill({ response, json: data });
   });
-  await navigate(page, "library");
+  // Library and Channels share one mounted page; leave it to refresh API fixtures.
+  await navigate(page, "profiles");
   await navigate(page, "channels");
-  const row = page.getByRole("row").filter({
+  const row = page.getByRole("article").filter({
     has: page.getByRole("button", { name: "Idle guide proof", exact: true }),
   });
   await expect(row).toBeVisible();
@@ -1416,7 +1601,10 @@ test("management now-next advances while idle and refreshes coverage without los
   await page.clock.runFor(6000);
   await expect(row).not.toContainText("Idle episode one");
   await expect(row).toContainText("Idle episode two");
-  await row.getByRole("button", { name: "Edit details", exact: true }).click();
+  const previewPanel = await openChannel(page, "Idle guide proof");
+  await previewPanel
+    .getByRole("button", { name: "Edit details", exact: true })
+    .click();
   const field = page.getByLabel("Channel name", { exact: true });
   await field.fill("Unsaved identity");
   await field.focus();

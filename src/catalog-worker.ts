@@ -1,3 +1,9 @@
+import {
+  browseSelectionPage,
+  browseCatalogTree,
+  type SelectionPageInput,
+  type TreePageInput,
+} from "./catalog-selection.js";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { Store } from "./database.js";
@@ -69,26 +75,40 @@ function execute(work: CatalogWork) {
       const result = withCatalogCancellation(
         () => checkCancellation(work),
         () =>
-          work.operation === "library"
-            ? browseLibraryPage(
+          work.operation === "selection"
+            ? browseSelectionPage(
                 reader,
                 account,
                 work.profileId,
-                work.input as LibraryPageInput,
+                work.input as SelectionPageInput,
               )
-            : work.operation === "media"
-              ? browseMediaPage(
+            : work.operation === "tree"
+              ? browseCatalogTree(
                   reader,
                   account,
                   work.profileId,
-                  work.input as MediaPageInput,
+                  work.input as TreePageInput,
                 )
-              : programmingOptions(
-                  reader,
-                  account,
-                  work.profileId,
-                  work.input as CatalogOptionsInput,
-                ),
+              : work.operation === "library"
+                ? browseLibraryPage(
+                    reader,
+                    account,
+                    work.profileId,
+                    work.input as LibraryPageInput,
+                  )
+                : work.operation === "media"
+                  ? browseMediaPage(
+                      reader,
+                      account,
+                      work.profileId,
+                      work.input as MediaPageInput,
+                    )
+                  : programmingOptions(
+                      reader,
+                      account,
+                      work.profileId,
+                      work.input as CatalogOptionsInput,
+                    ),
       );
       checkCancellation(work);
       invariant(

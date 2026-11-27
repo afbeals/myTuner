@@ -45,10 +45,22 @@ export function registerRetainedRoutes(
         .object({
           category: z.enum(["picture", "sound", "captions", "other"]),
           client: z.enum(["browser", "tv"]),
+          appVersion: z
+            .string()
+            .max(64)
+            .regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/)
+            .optional(),
         })
         .strict()
         .parse(request.body);
-    return reports.preview(account, sessionId, body.category, body.client);
+    return reports.preview(
+      account,
+      sessionId,
+      body.category,
+      body.client,
+      Date.now(),
+      body.appVersion,
+    );
   });
   app.post("/api/problem-reports", (request) => {
     const account = actor(request),
@@ -60,24 +72,26 @@ export function registerRetainedRoutes(
   });
   app.get("/api/problem-reports", (request) => {
     const account = actor(request),
-      { offset, limit } = z
+      { offset, limit, status } = z
         .object({
           offset: z.coerce.number().int().min(0).max(1000000).default(0),
           limit: z.coerce.number().int().min(1).max(100).default(25),
+          status: z.enum(["all", "new", "acknowledged"]).default("all"),
         })
         .parse(request.query);
-    return reports.list(account, offset, limit);
+    return reports.list(account, offset, limit, Date.now(), status);
   });
   app.get("/api/admin/problem-reports", (request) => {
     const account = actor(request);
     requireAdmin(account);
-    const { offset, limit } = z
+    const { offset, limit, status } = z
       .object({
         offset: z.coerce.number().int().min(0).max(1000000).default(0),
         limit: z.coerce.number().int().min(1).max(100).default(25),
+        status: z.enum(["all", "new", "acknowledged"]).default("all"),
       })
       .parse(request.query);
-    return reports.list(account, offset, limit);
+    return reports.list(account, offset, limit, Date.now(), status);
   });
   app.patch("/api/admin/problem-reports/:reportId", (request, reply) => {
     const account = actor(request),
