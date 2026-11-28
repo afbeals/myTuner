@@ -19,6 +19,10 @@ import type { Account, Media } from "./domain.js";
 import { invariant } from "./domain.js";
 import {
   createMediaAuthorizer,
+  createProfileMediaAuthorizer,
+  canBypassMediaGrants,
+  profileLibraryActor,
+  programmingActor,
   normalizeSubtree,
   requireProfile,
   withinSubtree,
@@ -51,7 +55,7 @@ function compactCatalog(
       store,
       {
         profileId,
-        admin: account.role === "admin",
+        admin: canBypassMediaGrants(account, profileId),
         availableOnly,
         ...(sourceId === undefined ? {} : { sourceId }),
       },
@@ -105,7 +109,7 @@ export function catalog(
     parameters.push(sourceId);
   }
   if (availableOnly) predicates.push("m.available=1");
-  if (account.role !== "admin") {
+  if (!canBypassMediaGrants(account, profileId)) {
     predicates.push(`EXISTS (SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=m.source_id AND
       (g.subtree='' OR m.relative_path=g.subtree OR substr(m.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))`);
     parameters.push(profileId);
@@ -304,9 +308,11 @@ export function browseLibrarySummary(
   profileId: string,
   search = "",
   sourceId?: string,
+  view: { topLevel?: boolean; annotateAccess?: boolean } = {},
 ): Omit<ReturnType<typeof buildBrowseLibrary>, "searchItems"> {
   requireProfile(store, account, profileId);
-  const build = () => buildBrowseLibrary(store, account, profileId, sourceId);
+  const build = () =>
+    buildBrowseLibrary(store, account, profileId, sourceId, view);
   const { searchItems, ...library } =
     store.filename === ":memory:"
       ? cachedBrowseValue(
@@ -317,6 +323,8 @@ export function browseLibrarySummary(
             account.role,
             profileId,
             sourceId,
+            view,
+            canBypassMediaGrants(account, profileId),
           ]),
           build,
         )
@@ -478,7 +486,12 @@ function buildBrowseLibrary(
   account: Account,
   profileId: string,
   sourceId?: string,
+  view: { topLevel?: boolean; annotateAccess?: boolean } = {},
 ) {
+  const topLevel = view.topLevel ?? false;
+  const profileCanRead = view.annotateAccess
+    ? createProfileMediaAuthorizer(store, profileId)
+    : () => true;
   const items = compactCatalog(store, account, profileId, false, sourceId);
   const searchItems: LibrarySearchItem[] = [];
   const sources = store.db
@@ -491,6 +504,7 @@ function buildBrowseLibrary(
       sourceId: string;
       title: string;
       artwork: { mediaId: string; index: number; coverType: string }[];
+      profileAllowed?: boolean;
       seasons: Map<
         number,
         { number: number; available: number; unavailable: number }
@@ -502,16 +516,32 @@ function buildBrowseLibrary(
       title: string;
       sourceId: string;
       available: boolean;
+      profileAllowed?: boolean;
     }[] = [],
     folders = new Map<
       string,
-      { sourceId: string; directory: string; available: number }
+      {
+        sourceId: string;
+        directory: string;
+        available: number;
+        profileAllowed?: boolean;
+      }
     >(),
     collections = new Map<
       string,
-      { sourceId: string; key: string; title: string; available: number }
+      {
+        sourceId: string;
+        key: string;
+        title: string;
+        available: number;
+        profileAllowed?: boolean;
+      }
     >();
   const sourceMap = new Map(sources.map((source) => [source.id, source]));
+  // Built from the same authorized catalog pass: no filesystem walks or extra media reads.
+  const identifiedShowRoots = new Set<string>(),
+    customAvailable = new Map<string, number>(),
+    customProfileAllowed = new Map<string, boolean>();
   let processed = 0;
   for (const compact of items) {
     if (processed++ % 128 === 0) cancellationCheck?.();
@@ -522,6 +552,8 @@ function buildBrowseLibrary(
       title: compact.storedTitle,
       available: compact.available,
     };
+    const allowed = profileCanRead(item);
+    const annotate = view.annotateAccess ? { profileAllowed: allowed } : {};
     const src = sourceMap.get(item.source_id)!,
       display = { title: compact.title },
       data = {
@@ -540,35 +572,62 @@ function buildBrowseLibrary(
         posix.dirname(item.relative_path) === "."
           ? ""
           : posix.dirname(item.relative_path);
+    if (topLevel) {
+      if (src.kind === "videos" && view.annotateAccess)
+        customProfileAllowed.set(
+          src.id,
+          (customProfileAllowed.get(src.id) ?? true) && allowed,
+        );
+      if (src.kind === "videos")
+        customAvailable.set(
+          src.id,
+          (customAvailable.get(src.id) ?? 0) + item.available,
+        );
+      if (src.kind === "shows" && !compact.showKey.startsWith("folder:"))
+        identifiedShowRoots.add(
+          src.id + ":" + directory.replace(/(?:^|\/)Season[ ._-]*\d+$/i, ""),
+        );
+    }
     const searchItem: LibrarySearchItem = {
       fields: compact.fields,
       folders: [],
     };
-    const folderKey = item.source_id + ":" + directory,
-      folder = folders.get(folderKey) ?? {
-        sourceId: item.source_id,
-        directory,
-        available: 0,
-      };
-    searchItem.folders.push(folderKey);
-    folder.available += item.available;
-    folders.set(folderKey, folder);
-    // Custom libraries expose parent folders even when every video is nested.
-    // Counts are accumulated only from the already-authorized catalog rows.
-    if (src.kind === "videos" || src.kind === "commercials") {
-      let parent = directory;
-      while (parent) {
-        const next = posix.dirname(parent);
-        parent = next === "." ? "" : next;
-        const key = src.id + ":" + parent;
-        const ancestor = folders.get(key) ?? {
-          sourceId: src.id,
-          directory: parent,
+    if (!topLevel || src.kind === "videos") {
+      // Main-page custom folders aggregate directly into their first path component.
+      // Detail/search/picker calls retain every indexed level through the default view.
+      const folderDirectory = topLevel ? directory.split("/")[0]! : directory;
+      const folderKey = item.source_id + ":" + folderDirectory,
+        folder = folders.get(folderKey) ?? {
+          sourceId: item.source_id,
+          directory: folderDirectory,
           available: 0,
+          ...annotate,
         };
-        ancestor.available += item.available;
-        folders.set(key, ancestor);
-        searchItem.folders.push(key);
+      searchItem.folders.push(folderKey);
+      folder.available += item.available;
+      if (view.annotateAccess)
+        folder.profileAllowed = (folder.profileAllowed ?? true) && allowed;
+      folders.set(folderKey, folder);
+      // Counts use already-authorized rows; do not enumerate source directories.
+      if (!topLevel && (src.kind === "videos" || src.kind === "commercials")) {
+        let parent = directory;
+        while (parent) {
+          const next = posix.dirname(parent);
+          parent = next === "." ? "" : next;
+          const key = src.id + ":" + parent;
+          const ancestor = folders.get(key) ?? {
+            sourceId: src.id,
+            directory: parent,
+            available: 0,
+            ...annotate,
+          };
+          ancestor.available += item.available;
+          if (view.annotateAccess)
+            ancestor.profileAllowed =
+              (ancestor.profileAllowed ?? true) && allowed;
+          folders.set(key, ancestor);
+          searchItem.folders.push(key);
+        }
       }
     }
     if (src.kind === "shows") {
@@ -586,7 +645,10 @@ function buildBrowseLibrary(
             }),
           ),
           seasons: new Map(),
+          ...annotate,
         };
+      if (view.annotateAccess)
+        show.profileAllowed = (show.profileAllowed ?? true) && allowed;
       searchItem.show = mapKey;
       const number = compact.season,
         season = show.seasons.get(number) ?? {
@@ -605,6 +667,7 @@ function buildBrowseLibrary(
         title: display.title,
         sourceId: src.id,
         available: Boolean(item.available),
+        ...annotate,
       });
     }
     const key = compact.collectionKey;
@@ -614,14 +677,49 @@ function buildBrowseLibrary(
         key,
         title: data.collection!.title,
         available: 0,
+        ...annotate,
       };
+      if (view.annotateAccess)
+        c.profileAllowed = (c.profileAllowed ?? true) && allowed;
       searchItem.collection = src.id + ":" + key;
       c.available += item.available;
       collections.set(src.id + ":" + key, c);
     }
     searchItems.push(searchItem);
   }
+  // A source-root card still opens the existing recursive folder modal.
+  for (const [sourceId, available] of customAvailable) {
+    const root = folders.get(sourceId + ":");
+    if (root) {
+      root.available = available;
+      if (view.annotateAccess)
+        root.profileAllowed = customProfileAllowed.get(sourceId) ?? true;
+    }
+  }
   const visibleSourceIds = new Set(items.map((item) => item.sourceId));
+  const fallbackShowRoots = new Set(
+    topLevel
+      ? [...shows.values()]
+          .filter((show) => show.key.startsWith("folder:"))
+          .map((show) => show.sourceId + ":" + show.key.slice("folder:".length))
+      : [],
+  );
+  const landingShow = (show: { sourceId: string; key: string }) => {
+    if (!topLevel || !show.key.startsWith("folder:")) return true;
+    let directory = show.key.slice("folder:".length);
+    // Prefer the identified show over a second folder-derived card in that same directory.
+    if (identifiedShowRoots.has(show.sourceId + ":" + directory)) return false;
+    while (directory && directory !== ".") {
+      directory = posix.dirname(directory);
+      if (directory === ".") break;
+      if (
+        identifiedShowRoots.has(show.sourceId + ":" + directory) ||
+        fallbackShowRoots.has(show.sourceId + ":" + directory)
+      )
+        return false;
+    }
+    return true;
+  };
   return {
     sources:
       sourceId === undefined
@@ -629,12 +727,12 @@ function buildBrowseLibrary(
         : (store.db
             .prepare(
               `SELECT s.id,s.name,s.kind FROM sources s WHERE EXISTS (
-          SELECT 1 FROM media m WHERE m.source_id=s.id${account.role === "admin" ? "" : ` AND EXISTS (SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=m.source_id AND (g.subtree='' OR m.relative_path=g.subtree OR substr(m.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))`})`,
+          SELECT 1 FROM media m WHERE m.source_id=s.id${canBypassMediaGrants(account, profileId) ? "" : ` AND EXISTS (SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=m.source_id AND (g.subtree='' OR m.relative_path=g.subtree OR substr(m.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))`})`,
             )
             .all(
-              ...(account.role === "admin" ? [] : [profileId]),
+              ...(canBypassMediaGrants(account, profileId) ? [] : [profileId]),
             ) as unknown as typeof sources),
-    shows: [...shows.values()].map((show) => ({
+    shows: [...shows.values()].filter(landingShow).map((show) => ({
       ...show,
       seasons: [...show.seasons.values()].sort((a, b) => a.number - b.number),
     })),
@@ -653,7 +751,7 @@ export function createCollection(
   name: string,
   mediaIds: string[],
 ) {
-  requireProfile(store, account, profileId, true);
+  account = programmingActor(store, account, profileId);
   return store.transaction(() => {
     const current = store.db
       .prepare("SELECT * FROM collections WHERE id=?")
@@ -708,7 +806,7 @@ export function saveCollection(
   collectionId?: string,
   expectedRevision?: string,
 ) {
-  requireProfile(store, account, profileId, true);
+  account = programmingActor(store, account, profileId);
   const id = collectionId ?? randomUUID();
   if (collectionId) {
     const current = store.db
@@ -766,23 +864,22 @@ export function collectionSummaries(
   store: Store,
   account: Account,
   profileId: string,
+  annotateAccess = false,
 ) {
   requireProfile(store, account, profileId);
-  const access =
-    account.role === "admin"
-      ? ""
-      : ` AND c.owner_account_id=? AND NOT EXISTS (
-    SELECT 1 FROM collection_items hidden JOIN media h ON h.id=hidden.media_id
-    WHERE hidden.collection_id=c.id AND NOT EXISTS (SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=h.source_id AND
-      (g.subtree='' OR h.relative_path=g.subtree OR substr(h.relative_path,1,length(g.subtree)+1)=g.subtree||'/')))`;
-  return store.db
+  const denied = `EXISTS (SELECT 1 FROM collection_items hidden JOIN media h ON h.id=hidden.media_id WHERE hidden.collection_id=c.id AND NOT EXISTS (SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=h.source_id AND (g.subtree='' OR h.relative_path=g.subtree OR substr(h.relative_path,1,length(g.subtree)+1)=g.subtree||'/')))`;
+  const owner = account.role === "admin" ? "" : " AND c.owner_account_id=?";
+  const grantFilter = canBypassMediaGrants(account, profileId)
+    ? ""
+    : ` AND NOT ${denied}`;
+  const rows = store.db
     .prepare(
-      `SELECT c.id,c.name,c.owner_account_id AS ownerAccountId,SUM(CASE WHEN m.available=1 THEN 1 ELSE 0 END) AS count,COUNT(ci.media_id) AS totalCount,SUM(CASE WHEN m.available=0 THEN 1 ELSE 0 END) AS unavailableCount
-    FROM collections c LEFT JOIN collection_items ci ON ci.collection_id=c.id LEFT JOIN media m ON m.id=ci.media_id
-    WHERE c.deleted_ms IS NULL${access} GROUP BY c.id ORDER BY c.name,c.id`,
+      `SELECT c.id,c.name,c.owner_account_id AS ownerAccountId,SUM(CASE WHEN m.available=1 THEN 1 ELSE 0 END) AS count,COUNT(ci.media_id) AS totalCount,SUM(CASE WHEN m.available=0 THEN 1 ELSE 0 END) AS unavailableCount${annotateAccess ? `,NOT ${denied} AS profileAllowed` : ""} FROM collections c LEFT JOIN collection_items ci ON ci.collection_id=c.id LEFT JOIN media m ON m.id=ci.media_id WHERE c.deleted_ms IS NULL${owner}${grantFilter} GROUP BY c.id ORDER BY c.name,c.id`,
     )
     .all(
-      ...(account.role === "admin" ? [] : [account.id, profileId]),
+      ...(annotateAccess ? [profileId] : []),
+      ...(account.role === "admin" ? [] : [account.id]),
+      ...(canBypassMediaGrants(account, profileId) ? [] : [profileId]),
     ) as unknown as {
     id: string;
     name: string;
@@ -790,7 +887,13 @@ export function collectionSummaries(
     count: number;
     totalCount: number;
     unavailableCount: number;
+    profileAllowed?: boolean;
   }[];
+  return rows.map((row) =>
+    annotateAccess
+      ? { ...row, profileAllowed: Boolean(row.profileAllowed) }
+      : row,
+  );
 }
 
 export function programmingOptions(
@@ -805,8 +908,11 @@ export function programmingOptions(
     sourceId?: string | undefined;
     showKey?: string | undefined;
     kind?: string | undefined;
+    access?: "profile" | "all";
   },
 ) {
+  if (input.access)
+    account = profileLibraryActor(store, account, profileId, input.access);
   const library = browseLibrarySummary(
     store,
     account,

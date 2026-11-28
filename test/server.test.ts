@@ -1590,3 +1590,356 @@ test("library inspection includes retained unavailable files only when explicitl
   });
   assert.deepEqual(denied.json().items, []);
 });
+
+test("HTTP channel programming saves zero groups and permanent archived deletion removes retained schedules with privacy and revision checks", async (t) => {
+  const f = await fixture(t);
+  const created = await f.app.inject({
+    method: "POST",
+    url: "/api/channels",
+    headers: f.oh,
+    payload: {
+      name: "Empty then programmed",
+      profileId: f.p,
+      visibility: "private",
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  const id = created.json().id,
+    path = `/api/channels/${id}`;
+  const config = {
+    profileId: f.p,
+    groups: [],
+    rules: noBreaks,
+    seed: 42,
+    expectedRevisionId: null,
+  };
+  const preview = await f.app.inject({
+    method: "POST",
+    url: `${path}/programming/preview`,
+    headers: f.oh,
+    payload: config,
+  });
+  assert.equal(preview.statusCode, 200);
+  assert.deepEqual(preview.json().entries, []);
+  const saved = await f.app.inject({
+    method: "PUT",
+    url: `${path}/programming`,
+    headers: f.oh,
+    payload: config,
+  });
+  assert.equal(saved.statusCode, 200);
+  const read = await f.app.inject({
+    url: `${path}/programming`,
+    headers: f.oh,
+  });
+  assert.deepEqual(read.json().config.groups, []);
+  const listed = (
+    await f.app.inject({ url: `/api/profiles/${f.p}/channels`, headers: f.oh })
+  ).json();
+  assert.equal(
+    listed.find((c: { id: string }) => c.id === id).hasProgramming,
+    false,
+  );
+  const adminList = (
+    await f.app.inject({ url: "/api/admin/channels", headers: f.ah })
+  ).json();
+  assert.equal(
+    adminList.items.find((c: { id: string }) => c.id === id).hasProgramming,
+    false,
+  );
+  const health = (
+    await f.app.inject({ url: "/api/admin/status", headers: f.ah })
+  ).json();
+  assert.equal(
+    health.schedules.find((entry: { id: string }) => entry.id === id).state,
+    "empty",
+  );
+  const content = {
+    ...config,
+    expectedRevisionId: saved.json().revisionId,
+    groups: [
+      {
+        id: "videos",
+        mode: "ordered",
+        selection: { type: "media", ids: [f.item.id] },
+      },
+    ],
+  };
+  const published = await f.app.inject({
+    method: "PUT",
+    url: `${path}/programming`,
+    headers: f.oh,
+    payload: content,
+  });
+  assert.equal(published.statusCode, 200);
+  const active = await f.app.inject({
+    url: `${path}/dependencies`,
+    headers: f.oh,
+  });
+  assert.equal(active.json().canDelete, false);
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "DELETE",
+        url: `${path}/permanent`,
+        headers: f.oh,
+        payload: { revision: active.json().revision },
+      })
+    ).statusCode,
+    409,
+  );
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "PATCH",
+        url: path,
+        headers: f.oh,
+        payload: { archived: true },
+      })
+    ).statusCode,
+    204,
+  );
+  for (const headers of [f.xh, f.vh]) {
+    assert.equal(
+      (await f.app.inject({ url: `${path}/dependencies`, headers })).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await f.app.inject({
+          method: "DELETE",
+          url: `${path}/permanent`,
+          headers,
+          payload: { revision: active.json().revision },
+        })
+      ).statusCode,
+      404,
+    );
+  }
+  const impact = (
+    await f.app.inject({ url: `${path}/dependencies`, headers: f.oh })
+  ).json();
+  assert.equal(impact.canDelete, true);
+  assert.equal(impact.counts.schedules, 2);
+  assert.ok(impact.counts.entries > 0);
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "DELETE",
+        url: `${path}/permanent`,
+        headers: f.oh,
+        payload: { revision: active.json().revision },
+      })
+    ).statusCode,
+    409,
+  );
+  const removed = await f.app.inject({
+    method: "DELETE",
+    url: `${path}/permanent`,
+    headers: f.oh,
+    payload: { revision: impact.revision },
+  });
+  assert.equal(removed.statusCode, 200, removed.body);
+  assert.equal(
+    (await f.app.inject({ url: `${path}/dependencies`, headers: f.ah }))
+      .statusCode,
+    404,
+  );
+  assert.equal(
+    await readFile(join(f.root, "media", "source.mp4"), "utf8"),
+    "0123456789",
+  );
+  assert.ok(
+    f.store.db.prepare("SELECT id FROM media WHERE id=?").get(f.item.id),
+  );
+  assert.deepEqual(f.store.db.prepare("PRAGMA foreign_key_check").all(), []);
+});
+
+test("library HTTP topLevel filters before pagination while nested folder selection remains available", async (t) => {
+  const f = await fixture(t);
+  const nested = media(f.store, f.src.id, "First/Featurettes/interview.mp4");
+  media(f.store, f.src.id, "First/Season 1/episode.mp4");
+  media(f.store, f.src.id, "Second/Featurettes/interview.mp4");
+  const base = `/api/profiles/${f.p}/library`;
+  const read = async (query: string) => {
+    const result = await f.app.inject({
+      url: `${base}?${query}`,
+      headers: f.oh,
+    });
+    assert.equal(result.statusCode, 200, result.body);
+    return result.json();
+  };
+  const raw = await read("limit=100&kind=videos");
+  assert.ok(
+    raw.folders.some((folder: { directory: string }) =>
+      folder.directory.endsWith("Featurettes"),
+    ),
+  );
+  const top = await read("topLevel=true&limit=100&kind=videos");
+  assert.equal(top.pagination.total, 3);
+  assert.deepEqual(
+    top.folders.map((folder: { directory: string }) => folder.directory).sort(),
+    ["", "First", "Second"],
+  );
+  assert.equal(
+    (await read("topLevel=true&limit=1&kind=videos&offset=1")).pagination.total,
+    3,
+  );
+  assert.equal(
+    (await read("topLevel=true&limit=1&kind=videos&offset=1")).folders.length,
+    1,
+  );
+  assert.equal(
+    (await read("topLevel=true&limit=24&titleOnly=true&search=Featurettes"))
+      .pagination.total,
+    0,
+  );
+  const noLimit = await read("topLevel=true&kind=videos");
+  assert.equal(noLimit.pagination.limit, 24);
+  assert.equal(noLimit.pagination.total, 3);
+  const selected = await f.app.inject({
+    method: "POST",
+    url: `/api/profiles/${f.p}/selection?limit=50`,
+    headers: f.oh,
+    payload: {
+      type: "folder",
+      sourceId: f.src.id,
+      directory: "First/Featurettes",
+      recursive: true,
+    },
+  });
+  assert.equal(selected.statusCode, 200, selected.body);
+  assert.deepEqual(
+    selected.json().items.map((item: { id: string }) => item.id),
+    [nested.id],
+  );
+  const invalid = await f.app.inject({
+    url: `${base}?topLevel=anything`,
+    headers: f.oh,
+  });
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(
+    await readFile(join(f.root, "media", "source.mp4"), "utf8"),
+    "0123456789",
+  );
+});
+
+test("admin library inspection is explicit and readonly while detail, tree, pickers and programming honor profile grants", async (t) => {
+  const f = await fixture(t);
+  f.store.db.prepare("DELETE FROM source_grants WHERE profile_id=?").run(f.p);
+  const base = `/api/profiles/${f.p}`;
+  const before = await readFile(join(f.root, "media", "source.mp4"), "utf8");
+  const normal = await f.app.inject({
+    url: `${base}/library?limit=24&topLevel=true`,
+    headers: f.ah,
+  });
+  assert.equal(normal.statusCode, 200, normal.body);
+  assert.equal(normal.json().pagination.total, 0);
+  assert.deepEqual(normal.json().sources, []);
+  const all = await f.app.inject({
+    url: `${base}/library?limit=24&topLevel=true&access=all`,
+    headers: f.ah,
+  });
+  assert.equal(all.statusCode, 200, all.body);
+  assert.equal(all.json().folders[0].profileAllowed, false);
+  assert.equal(
+    f.store.db
+      .prepare("SELECT COUNT(*) n FROM source_grants WHERE profile_id=?")
+      .get(f.p)!.n,
+    0,
+  );
+  const forged = await f.app.inject({
+    url: `${base}/library?access=all`,
+    headers: f.oh,
+  });
+  assert.equal(forged.statusCode, 403);
+  const options = await f.app.inject({
+    url: `${base}/library/options?limit=50`,
+    headers: f.ah,
+  });
+  assert.equal(options.statusCode, 200);
+  assert.equal(options.json().total, 0);
+  const tree = await f.app.inject({
+    url: `${base}/catalog/tree?sourceId=${f.src.id}&mode=files`,
+    headers: f.ah,
+  });
+  assert.equal(tree.statusCode, 200);
+  assert.equal(tree.json().total, 0);
+  const body = { type: "media", ids: [f.item.id] };
+  const denied = await f.app.inject({
+    method: "POST",
+    url: `${base}/selection?access=profile`,
+    headers: f.ah,
+    payload: body,
+  });
+  assert.equal(denied.statusCode, 404);
+  const inspection = await f.app.inject({
+    method: "POST",
+    url: `${base}/selection?access=all`,
+    headers: f.ah,
+    payload: body,
+  });
+  assert.equal(inspection.statusCode, 200, inspection.body);
+  assert.equal(inspection.json().items[0].profileAllowed, false);
+  const forgedDetail = await f.app.inject({
+    method: "POST",
+    url: `${base}/selection?access=all`,
+    headers: f.oh,
+    payload: body,
+  });
+  assert.equal(forgedDetail.statusCode, 403);
+  const ch = channel(f.store, f.admin);
+  const cfg = {
+    profileId: f.p,
+    groups: [{ id: "clips", mode: "ordered", selection: body }],
+    seed: 42,
+    rules: noBreaks,
+  };
+  const refused = await f.app.inject({
+    method: "PUT",
+    url: `/api/channels/${ch.id}/programming`,
+    headers: f.ah,
+    payload: cfg,
+  });
+  assert.equal(refused.statusCode, 404);
+  assert.equal(
+    f.store.db
+      .prepare("SELECT COUNT(*) n FROM schedule_revisions WHERE channel_id=?")
+      .get(ch.id)!.n,
+    0,
+  );
+  const collection = await f.app.inject({
+    method: "POST",
+    url: `${base}/collections`,
+    headers: f.ah,
+    payload: {
+      creationId: randomUUID(),
+      name: "Must not grant",
+      mediaIds: [f.item.id],
+    },
+  });
+  assert.equal(collection.statusCode, 404);
+  f.store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'')")
+    .run(f.p, f.src.id);
+  const allowed = await f.app.inject({
+    url: `${base}/library?limit=24&topLevel=true`,
+    headers: f.ah,
+  });
+  assert.equal(allowed.json().folders[0].profileAllowed, true);
+  assert.equal(
+    (
+      await f.app.inject({
+        method: "PUT",
+        url: `/api/channels/${ch.id}/programming`,
+        headers: f.ah,
+        payload: cfg,
+      })
+    ).statusCode,
+    200,
+  );
+  assert.equal(
+    await readFile(join(f.root, "media", "source.mp4"), "utf8"),
+    before,
+  );
+});

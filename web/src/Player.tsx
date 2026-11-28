@@ -1,3 +1,4 @@
+import { olderPlayback } from "./playback-state";
 import { useDraftNavigation } from "./navigation";
 import { Info } from "./Info";
 import { duration, playhead } from "./ui";
@@ -246,6 +247,7 @@ function Player(
     [subtitle, setSubtitle] = useState(-1),
     [cue, setCue] = useState(""),
     [pausedFrame, setPausedFrame] = useState<string | undefined>(),
+    [pauseRequested, setPauseRequested] = useState(false),
     cues = useRef<Cue[]>([]),
     [needsPlay, setNeedsPlay] = useState(false),
     [recentOpen, setRecentOpen] = useState(false),
@@ -318,10 +320,19 @@ function Player(
   };
 
   const update = (s: Playback) => {
+    if (olderPlayback(s, snapshot.current)) return false;
     snapshot.current = s;
+    setPauseRequested(false);
     setSession(s);
+    return true;
   };
   useEffect(() => {
+    snapshot.current = null;
+    setSession(null);
+    setMedia(null);
+    setDelivery(null);
+    setPausedFrame(undefined);
+    setPauseRequested(false);
     setError(null);
     setPollError(null);
     setLoading(true);
@@ -343,8 +354,7 @@ function Player(
       const sequence = controlSequence.current;
       try {
         const s = await api<Playback>(`/api/playback/sessions/${id}`);
-        if (current && sequence === controlSequence.current) {
-          update(s);
+        if (current && sequence === controlSequence.current && update(s)) {
           setPollError(null);
           const recoveringControl = controlRecovery.current;
           if (recoveringControl) {
@@ -453,6 +463,19 @@ function Player(
         controller.signal,
       );
       if (!active) return;
+      if (
+        (d.revisionId && d.revisionId !== revisionId) ||
+        (d.entryId && d.entryId !== entryId)
+      ) {
+        const fresh = await api<Playback>(
+          `/api/playback/sessions/${session!.id}`,
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (active) update(fresh);
+        return;
+      }
       const matchedAudio = matchLanguage(
         preferenceRef.current.audio,
         d.tracks.filter((t) => t.type === "audio"),
@@ -676,13 +699,14 @@ function Player(
     if (!current || controlPending.current || controlling) return;
     const sequence = ++controlSequence.current;
     controlPending.current = true;
+    setPauseRequested(action === "pause");
     // Preserve the displayed frame before delivery cleanup releases the source.
     // The in-memory poster lets paused delivery stop all fetching, including HLS.
     const el = video.current;
     if (el && el.readyState >= 2 && el.videoWidth && el.videoHeight) {
       try {
         const canvas = document.createElement("canvas");
-        const scale = Math.min(1, 1920 / el.videoWidth);
+        const scale = Math.min(1, 1920 / el.videoWidth, 1080 / el.videoHeight);
         canvas.width = Math.round(el.videoWidth * scale);
         canvas.height = Math.round(el.videoHeight * scale);
         const context = canvas.getContext("2d");
@@ -723,6 +747,64 @@ function Player(
       if (valid()) controlPending.current = false;
     }
   };
+  useEffect(() => {
+    const perform = (action: "pause" | "resume" | "toggle") => {
+      const current = snapshot.current;
+      if (
+        !current ||
+        controlPending.current ||
+        document.querySelector("dialog[open]")
+      )
+        return;
+      if (
+        (action === "pause" && current.paused) ||
+        (action === "resume" && !current.paused)
+      )
+        return;
+      void control(
+        action === "toggle" ? (current.paused ? "resume" : "pause") : action,
+      );
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input,textarea,select,[contenteditable='true']"))
+        return;
+      if (event.key === "MediaPause") {
+        event.preventDefault();
+        perform("pause");
+      } else if (event.key === "MediaPlay") {
+        event.preventDefault();
+        perform("resume");
+      } else if (event.key === "MediaPlayPause") {
+        event.preventDefault();
+        perform("toggle");
+      }
+    };
+    document.addEventListener("keydown", key);
+    const media = navigator.mediaSession;
+    if (media) {
+      try {
+        media.setActionHandler("pause", () => perform("pause"));
+        media.setActionHandler("play", () => perform("resume"));
+      } catch {
+        /* Some browsers do not expose OS media actions. */
+      }
+      media.playbackState = session ? (paused ? "paused" : "playing") : "none";
+    }
+    return () => {
+      document.removeEventListener("keydown", key);
+      if (media) {
+        try {
+          media.setActionHandler("pause", null);
+          media.setActionHandler("play", null);
+          media.playbackState = "none";
+        } catch {
+          /* Unsupported media actions have no cleanup. */
+        }
+      }
+    };
+  }, [session?.id, paused, controlling]);
   useDraftNavigation(
     paused,
     "Leave this paused playback? Switching profile or leaving Watch TV discards this device’s paused position and joins live when you return.",
@@ -847,7 +929,9 @@ function Player(
             className={`video-stage ${overlayOpen ? "controls-open" : "controls-hidden"}`}
             ref={stage}
           >
-            <div className="picture-surface">
+            <div
+              className={`picture-surface${(paused || pauseRequested) && cue && !failure ? " paused-with-captions" : ""}`}
+            >
               <video
                 ref={video}
                 poster={pausedFrame}
@@ -871,7 +955,7 @@ function Player(
                     setPausedFrame(undefined);
                 }}
               />
-              {(loading ||
+              {((loading && !paused && !pauseRequested) ||
                 (session && !session.available) ||
                 Boolean(failure)) && (
                 <div className="video-status" role="status">
@@ -884,6 +968,42 @@ function Player(
                   </p>
                 </div>
               )}
+              {(paused || pauseRequested) && (
+                <div
+                  className="paused-status"
+                  role="status"
+                  aria-label="Paused playback"
+                >
+                  <strong>Paused</strong>
+                  <span>
+                    {session?.context?.program?.title ??
+                      session?.context?.title ??
+                      media?.title ??
+                      "Current program"}
+                  </span>
+                  {session?.context && (
+                    <span>
+                      {playhead(
+                        session.context.airing.contentElapsedMs ??
+                          Math.max(
+                            0,
+                            session.context.entryDurationMs -
+                              session.context.remainingMs,
+                          ),
+                      )}
+                      {" / "}
+                      {playhead(
+                        session.context.airing.contentDurationMs ??
+                          session.context.entryDurationMs,
+                      )}
+                      {session.context.kind === "commercial"
+                        ? " · Commercial paused"
+                        : ""}
+                    </span>
+                  )}
+                  <small>Press Play to resume, or show controls.</small>
+                </div>
+              )}
               {cue && !failure && (
                 <div
                   className={`subtitle-cue caption-${preferences.size} caption-${preferences.background}`}
@@ -892,21 +1012,6 @@ function Player(
                 </div>
               )}
             </div>
-            {paused && session?.context && (
-              <div className="paused-status" role="status">
-                <strong>Paused · {session.context.title}</strong>
-                <span>
-                  {playhead(
-                    Math.max(
-                      0,
-                      session.context.entryDurationMs -
-                        session.context.remainingMs,
-                    ),
-                  )}{" "}
-                  / {playhead(session.context.entryDurationMs)}
-                </span>
-              </div>
-            )}
             {!overlayOpen && (
               <button
                 className="player-reveal secondary"
@@ -1008,7 +1113,15 @@ function Player(
                         ? `${Math.round(session.behindLiveMs / 1000)} seconds behind live`
                         : "● LIVE"}
                 </span>
-                {(paused || (session && session.behindLiveMs > 2000)) && (
+                {session?.scheduleUpdate?.rejoinRequired && (
+                  <p role="status">
+                    Programming has changed. Choose Go Live to receive the
+                    updated schedule.
+                  </p>
+                )}
+                {(paused ||
+                  (session && session.behindLiveMs > 2000) ||
+                  session?.scheduleUpdate?.rejoinRequired) && (
                   <div className="actions">
                     <Action
                       disabled={controlling}

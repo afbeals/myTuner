@@ -38,6 +38,7 @@ async function fixture(t: { after: (fn: () => unknown) => void }) {
     ch = channel(store, admin);
   const one = media(store, src.id, "Show/S01E01.mp4"),
     two = media(store, src.id, "Show/S01E02.mp4");
+  store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, src.id);
   const config: Programming = {
     profileId: p,
     groups: [
@@ -337,6 +338,7 @@ test("effective access evaluates target role, memberships, source subtrees and P
   f.store.db
     .prepare("INSERT INTO profile_accounts VALUES(?,?,1)")
     .run(f.p, viewer.id);
+  f.store.db.prepare("DELETE FROM source_grants WHERE profile_id=?").run(f.p);
   f.store.db
     .prepare("INSERT INTO source_grants VALUES(?,?,'Show')")
     .run(f.p, f.src.id);
@@ -499,6 +501,9 @@ test("playback context follows the actual scheduled shortened commercial and ret
   const f = await fixture(t),
     ads = source(f.store, "/ads", "commercials"),
     ad = media(f.store, ads.id, "ad.mp4", 12000);
+  f.store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'')")
+    .run(f.p, ads.id);
   const config = {
     ...f.config,
     commercialSelection: { type: "media" as const, ids: [ad.id] },
@@ -843,7 +848,7 @@ test("legacy pending revision without an initial checkpoint preserves its first 
   );
 });
 
-test("live next context follows pending publication while paused and behind-live context retain their timeline", async (t) => {
+test("live, paused and behind-live next context follows a safe pending publication", async (t) => {
   const f = await fixture(t),
     player = new PlaybackService(f.store, f.programming);
   f.programming.publish(f.admin, f.ch.id, f.config, 0, 6000);
@@ -872,12 +877,12 @@ test("live next context follows pending publication while paused and behind-live
   );
   assert.equal(
     player.describe(f.admin, paused.id, 900).context?.next?.title,
-    f.two.title,
+    replacement.title,
   );
   player.resume(f.admin, paused.id, 900);
   assert.equal(
     player.describe(f.admin, paused.id, 950).context?.next?.title,
-    f.two.title,
+    replacement.title,
   );
   assert.equal(
     player.describe(f.admin, live.id, 1000).context?.program?.title,
@@ -890,6 +895,9 @@ test("pending next-context agrees with activation across midroll and between-pro
     adSource = source(f.store, join(f.root, "ads"), "commercials"),
     ad = media(f.store, adSource.id, "ad.mp4", 200),
     replacement = media(f.store, f.src.id, "Replacement.mp4");
+  f.store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'')")
+    .run(f.p, adSource.id);
   const config: Programming = {
     ...f.config,
     commercialSelection: { type: "media", ids: [ad.id] },
@@ -925,7 +933,7 @@ test("pending next-context agrees with activation across midroll and between-pro
     );
     assert.equal(
       player.describe(f.admin, paused.id, time).context?.next?.title,
-      f.two.title,
+      replacement.title,
     );
   }
   assert.equal(
@@ -935,6 +943,6 @@ test("pending next-context agrees with activation across midroll and between-pro
   );
   assert.equal(
     player.describe(f.admin, paused.id, first.effectiveMs).context?.next?.title,
-    f.two.title,
+    replacement.title,
   );
 });

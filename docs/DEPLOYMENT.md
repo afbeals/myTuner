@@ -1,6 +1,6 @@
 # Standalone Docker and Unraid deployment
 
-Status: server/browser and native TV project **0.3.0**, database schema **20**. The owner has built and deployed 0.2.1 on Unraid and confirmed source/metadata loading after correcting storage, port and root mappings. The prior deployment does not verify the current 0.3.0 image; no current image publication or target-host acceptance is claimed here. Docker is unavailable on the implementation Mac; repeat Windows acceptance and Unraid lifecycle checks for this update. Physical-device acceptance remains open.
+Status: server/browser and native TV project **0.3.1**, database schema **22**. The owner has built and deployed 0.2.1 on Unraid and confirmed source/metadata loading after correcting storage, port and root mappings. The prior deployment does not verify the current 0.3.1 image; no current image publication or target-host acceptance is claimed here. Docker is unavailable on the implementation Mac; repeat Windows acceptance and Unraid lifecycle checks for this update. Physical-device acceptance remains open.
 
 Read [OPERATIONS.md](OPERATIONS.md) for onboarding, budgets, cleanup, backup/restore and diagnosis; [ARCHITECTURE.md](ARCHITECTURE.md) explains process/storage boundaries.
 

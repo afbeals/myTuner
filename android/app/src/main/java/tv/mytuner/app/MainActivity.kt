@@ -2,6 +2,7 @@ package tv.mytuner.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
@@ -15,6 +16,9 @@ import android.os.SystemClock
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -88,6 +92,12 @@ class MainActivity : Activity() {
     private var lastErrorCategory = "none"
     private var playbackStatus: TextView? = null
     private var pausedOverlay: TextView? = null
+    private var pausedPicture: ImageView? = null
+    private var videoSurface: View? = null
+    private var pictureReady = false
+    private val pausePictures = PausePictures()
+    private var pauseCopyRequest: PausePictures.Request? = null
+    private var controlAction: String? = null
     private var pauseButton: Button? = null
     private var goLiveButton: Button? = null
     private var subtitleText: TextView? = null
@@ -199,6 +209,7 @@ class MainActivity : Activity() {
         val value =
             error.message ?: "Unable to reach your server. Check its address and network access."
         if (screen == "player") {
+            if (status == 401 || status == 403 || status == 404) clearPausePicture()
             errorText?.text = value
             errorText?.visibility = View.VISIBLE
             player?.pause()
@@ -277,6 +288,12 @@ class MainActivity : Activity() {
     }
 
     private fun stopPlayback() {
+        clearPausePicture()
+        videoSurface = null
+        pictureReady = false
+        pausedPicture = null
+        controlAction = null
+        pauseCopyRequest = null
         captionRequests.invalidate()
         captionFailure = null
         loadSerial++
@@ -1028,6 +1045,14 @@ class MainActivity : Activity() {
                 isFocusableInTouchMode = false
             }
         frame.addView(playerView, FrameLayout.LayoutParams(-1, -1))
+        videoSurface = playerView.videoSurfaceView
+        pausedPicture = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            visibility = View.GONE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isFocusable = false
+        }
+        frame.addView(pausedPicture, FrameLayout.LayoutParams(-1, -1))
         player =
             ExoPlayer.Builder(this)
                 .setMediaSourceFactory(
@@ -1053,6 +1078,8 @@ class MainActivity : Activity() {
                             }
 
                             override fun onRenderedFirstFrame() {
+                                pictureReady = true
+                                if (!controlPending && !controlInterrupted && session?.optBoolean("paused") == false) clearPausePicture()
                                 playerView.contentDescription = "Video playing"
                                 if (!pollInterrupted && !controlPending && !controlInterrupted)
                                     errorText?.visibility = View.GONE
@@ -1284,44 +1311,103 @@ class MainActivity : Activity() {
         if (channels.length() > 0) startChannel(channels.getJSONObject(next).getString("id"))
     }
 
+    private fun clearPausePicture() {
+        pausePictures.invalidate()
+        pausedPicture?.setImageDrawable(null)
+        pausedPicture?.visibility = View.GONE
+    }
+
+    private fun capturePausePicture(complete: () -> Unit) {
+        val s = session
+        val surface = videoSurface
+        val entry = s?.optJSONObject("playback")?.optJSONObject("entry")
+        val size = PausePictures.dimensions(surface?.width ?: 0, surface?.height ?: 0)
+        if (s == null || entry == null || surface == null || size == null || !pictureReady || pauseCopyRequest != null) {
+            complete()
+            return
+        }
+        val request = pausePictures.begin(s.getString("id"), entry.getString("id"))
+        var finished = false
+        fun finish(bitmap: Bitmap?) {
+            if (finished) return
+            finished = true
+            if (pausePictures.accepts(request, session?.optString("id"), session?.optJSONObject("playback")?.optJSONObject("entry")?.optString("id"), controlPending && controlAction == "pause" || session?.optBoolean("paused") == true)) {
+                if (bitmap != null) {
+                    pausedPicture?.setImageBitmap(bitmap)
+                    pausedPicture?.visibility = View.VISIBLE
+                }
+                complete()
+            }
+        }
+        main.postDelayed({ finish(null) }, 300)
+        try {
+            if (surface is TextureView && surface.isAvailable) {
+                finish(surface.getBitmap(size.first, size.second))
+            } else if (surface is SurfaceView && Build.VERSION.SDK_INT >= 24 && surface.holder.surface.isValid) {
+                val bitmap = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
+                pauseCopyRequest = request
+                PixelCopy.request(surface, bitmap, { result ->
+                    if (pauseCopyRequest === request) pauseCopyRequest = null
+                    finish(if (result == PixelCopy.SUCCESS) bitmap else null)
+                }, main)
+            } else finish(null)
+        } catch (_: RuntimeException) {
+            if (pauseCopyRequest === request) pauseCopyRequest = null
+            finish(null)
+        } catch (_: OutOfMemoryError) {
+            if (pauseCopyRequest === request) pauseCopyRequest = null
+            finish(null)
+        }
+    }
+
     private fun control(action: String) {
         val s = session ?: return
         if (controlPending || controlInterrupted) return
         val serial = ++controlSerial
         controlPending = true
+        controlAction = action
         captionRequests.invalidate()
         renderStatus()
         deliveryFailed = false
         loadSerial++
         player?.pause()
-        val a = api()
-        task(
-            { a.json("/api/playback/sessions/${s.getString("id")}/$action", "POST") },
-            { next ->
-                if (serial != controlSerial) return@task
-                controlPending = false
-                controlInterrupted = false
-                session = next
-                receivedAt = SystemClock.elapsedRealtime()
-                previousDelivery = null
-                if (next.optBoolean("paused")) {
-                    loadSerial++
-                    player?.stop()
-                    player?.clearMediaItems()
-                    errorText?.visibility = View.GONE
-                    renderStatus()
-                } else loadDelivery(next)
-            },
-            { failure ->
-                if (serial == controlSerial) {
+        val send = {
+            val a = api()
+            task(
+                { a.json("/api/playback/sessions/${s.getString("id")}/$action", "POST") },
+                { next ->
+                    if (serial != controlSerial) return@task
                     controlPending = false
-                    controlInterrupted = true
-                    renderStatus()
-                    error(failure)
-                    pollPlayback()
-                }
-            },
-        )
+                    controlInterrupted = false
+                    controlAction = null
+                    session = next
+                    receivedAt = SystemClock.elapsedRealtime()
+                    previousDelivery = null
+                    if (next.optBoolean("paused")) {
+                        loadSerial++
+                        pictureReady = false
+                        player?.stop()
+                        player?.clearMediaItems()
+                        errorText?.visibility = View.GONE
+                        renderStatus()
+                    } else loadDelivery(next)
+                },
+                { failure ->
+                    if (serial == controlSerial) {
+                        controlPending = false
+                        controlInterrupted = true
+                        renderStatus()
+                        error(failure)
+                        pollPlayback()
+                    }
+                },
+            )
+        }
+        if (action == "pause") capturePausePicture(send)
+        else {
+            if (action == "goLive") clearPausePicture() else pausePictures.invalidate()
+            send()
+        }
     }
 
     private fun renderStatus() {
@@ -1336,17 +1422,24 @@ class MainActivity : Activity() {
         val context = s.optJSONObject("context")
         val program = context?.optJSONObject("program")
         pausedOverlay?.apply {
-            visibility = if (s.optBoolean("paused")) View.VISIBLE else View.GONE
-            val duration = context?.optLong("entryDurationMs") ?: 0L
-            val elapsed = duration - (context?.optLong("remainingMs") ?: duration)
-            text = "Paused · ${context?.optString("title") ?: playingTitle?.text ?: "Current program"}\n${PlaybackMath.displayTime(elapsed)} / ${PlaybackMath.displayTime(duration)}"
+            visibility = if (s.optBoolean("paused") || (controlPending || controlInterrupted) && controlAction == "pause") View.VISIBLE else View.GONE
+            val airing = context?.optJSONObject("airing")
+            val entryDuration = context?.optLong("entryDurationMs") ?: 0L
+            val entryElapsed = entryDuration - (context?.optLong("remainingMs") ?: entryDuration)
+            val duration = airing?.optLong("contentDurationMs", entryDuration) ?: entryDuration
+            val elapsed = airing?.optLong("contentElapsedMs", entryElapsed) ?: entryElapsed
+            val title = program?.optString("title")?.takeIf { it.isNotBlank() } ?: context?.optString("title") ?: playingTitle?.text ?: "Current program"
+            text = "Paused · $title\n${PlaybackMath.displayTime(elapsed)} / ${PlaybackMath.displayTime(duration)}\nPress Play to resume"
         }
-        contextText?.text = if (context == null) "" else listOf(
-            if (context.optString("kind") == "commercial") "Commercial · ${(context.optLong("remainingMs") + 999)/1000} seconds remaining · ${program?.optString("title") ?: "Programming resumes next"}"
+        contextText?.text = listOf(
+            if (context == null) "" else if (context.optString("kind") == "commercial") "Commercial · ${(context.optLong("remainingMs") + 999)/1000} seconds remaining · ${program?.optString("title") ?: "Programming resumes next"}"
             else "${context.optString("title")} · ${if (context.isNull("seasonNumber")) "" else "S${context.optInt("seasonNumber")} E${context.optInt("episodeNumber")}"}",
-            "Next: ${context.optJSONObject("next")?.optString("title") ?: "More to come"}",
-        ).joinToString("\n")
-        goLiveButton?.isEnabled = s.optBoolean("paused") || behind > 2000
+            if (context == null) "" else "Next: ${context.optJSONObject("next")?.optString("title") ?: "More to come"}",
+            if (s.optJSONObject("scheduleUpdate")?.optBoolean("rejoinRequired") == true)
+                "Programming has changed. Choose Go Live to receive the updated schedule." else "",
+        ).filter { it.isNotBlank() }.joinToString("\n")
+        goLiveButton?.isEnabled = s.optBoolean("paused") || behind > 2000 ||
+            s.optJSONObject("scheduleUpdate")?.optBoolean("rejoinRequired") == true
         goLiveButton?.isClickable = !controlPending && !controlInterrupted
     }
 
@@ -1372,6 +1465,8 @@ class MainActivity : Activity() {
         captionFailure = null
         captions = emptyList()
         if (!s.optBoolean("available")) {
+            clearPausePicture()
+            pictureReady = false
             delivery = null
             player?.stop()
             errorText?.text = getString(R.string.unavailable)
@@ -1402,7 +1497,9 @@ class MainActivity : Activity() {
                         "POST",
                         capabilities,
                     )
-                val m =
+                val stale = (d.has("revisionId") && d.optString("revisionId") != s.optString("revisionId")) ||
+                    (d.has("entryId") && d.optString("entryId") != entry.optString("id"))
+                val m = if (stale) null else
                     a.json(
                         "/api/profiles/${s.getString("profileId")}/media/${entry.getString("mediaId")}"
                     )
@@ -1417,6 +1514,10 @@ class MainActivity : Activity() {
                     )
                 )
                     return@task
+                if (m == null) {
+                    pollPlayback()
+                    return@task
+                }
                 delivery = d
                 if (audio < 0) audio = preferredTrack(d, "audio")
                 if (subtitleIndex < 0) subtitleIndex = preferredTrack(d, "subtitle")
@@ -1426,6 +1527,7 @@ class MainActivity : Activity() {
                     } ?: m.getString("title")
                 val url = d.getString("url") + (if (audio >= 0) "?audioTrack=$audio" else "")
                 val media = MediaItem.fromUri(PlaybackMath.mediaAddress(a.base, url))
+                pictureReady = false
                 player?.setMediaItem(media)
                 player?.prepare()
                 if (d.getString("mode") == "direct") player?.seekTo(d.getLong("sourceOffsetMs"))
@@ -1483,11 +1585,13 @@ class MainActivity : Activity() {
                     old.optJSONObject("playback")?.optJSONObject("entry")?.optString("id") !=
                         next.optJSONObject("playback")?.optJSONObject("entry")?.optString("id") ||
                         old.optString("revisionId") != next.optString("revisionId")
+                if (changed) clearPausePicture()
                 session = next
                 receivedAt = SystemClock.elapsedRealtime()
                 val recover = (pollInterrupted || controlInterrupted) && !deliveryFailed
                 pollInterrupted = false
                 controlInterrupted = false
+                controlAction = null
                 renderStatus()
                 if (changed) {
                     captionRequests.invalidate()
@@ -1500,6 +1604,7 @@ class MainActivity : Activity() {
                 if (changed || availabilityChanged || recover) {
                     if (next.optBoolean("paused") && !deliveryFailed) {
                         loadSerial++
+                        pictureReady = false
                         player?.stop()
                         player?.clearMediaItems()
                         errorText?.visibility = View.GONE

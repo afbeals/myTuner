@@ -1,3 +1,7 @@
+import {
+  effectivePlaybackRevision,
+  type PlaybackClock,
+} from "./playback-updates.js";
 import { applicationVersion } from "./version.js";
 import { randomUUID } from "node:crypto";
 import type { Store } from "./database.js";
@@ -203,6 +207,10 @@ export class ProblemReports {
       404,
       "Playback session not found",
     );
+    const revisionId = effectivePlaybackRevision(
+      row as unknown as PlaybackClock,
+      now,
+    );
     const profileId = String(row.profile_id),
       channelId = String(row.channel_id),
       position =
@@ -211,8 +219,12 @@ export class ProblemReports {
     const channel = visibleChannel(this.store, account, channelId);
     requireProfile(this.store, account, profileId);
     requireChannelMedia(this.store, account, profileId, channel, {
-      revisionId: String(row.revision_id),
+      revisionId,
       positionMs: position,
+      untilMs:
+        revisionId === row.revision_id && row.pending_at_ms !== null
+          ? Number(row.pending_at_ms)
+          : undefined,
     });
     invariant(
       this.store.db
@@ -227,14 +239,14 @@ export class ProblemReports {
       .prepare(
         "SELECT m.* FROM schedule_entries e JOIN media m ON m.id=e.media_id WHERE e.revision_id=? AND e.start_ms<=? AND e.end_ms>? LIMIT 1",
       )
-      .get(String(row.revision_id), position, position) as
+      .get(revisionId, position, position) as
       (Media & { id: string }) | undefined;
     // Select the entry separately: both tables have an id column.
     const ref = this.store.db
       .prepare(
         "SELECT id,media_id FROM schedule_entries WHERE revision_id=? AND start_ms<=? AND end_ms>? LIMIT 1",
       )
-      .get(String(row.revision_id), position, position);
+      .get(revisionId, position, position);
     invariant(
       entry && ref && canReadMedia(this.store, account, profileId, entry),
       404,

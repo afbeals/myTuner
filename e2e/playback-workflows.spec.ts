@@ -442,6 +442,29 @@ test("real largest English captions stay inside the picture and clear of visible
       expect(paused.overlaps).toEqual([]);
       expect(paused.cue.bottom).toBeLessThanOrEqual(paused.picture.bottom);
       measurements.push({ width, controls: "paused", ...paused });
+      await page
+        .getByRole("button", { name: "Full screen", exact: true })
+        .click();
+      await expect
+        .poll(() => page.evaluate(() => !!document.fullscreenElement))
+        .toBe(true);
+      const fullscreen = await cueGeometry(stage);
+      expect(fullscreen.overlaps).toEqual([]);
+      for (const container of [fullscreen.picture, fullscreen.video]) {
+        expect(fullscreen.cue.top).toBeGreaterThanOrEqual(container.top);
+        expect(fullscreen.cue.bottom).toBeLessThanOrEqual(container.bottom);
+      }
+      expect(fullscreen.clipped).toBe(false);
+      measurements.push({
+        width,
+        controls: "paused-fullscreen",
+        ...fullscreen,
+      });
+      await testInfo.attach(`captions-${width}-paused-fullscreen`, {
+        body: await stage.screenshot(),
+        contentType: "image/png",
+      });
+      await page.evaluate(() => document.exitFullscreen());
       await page.getByRole("button", { name: "Resume", exact: true }).click();
       await advancing(page);
     }

@@ -61,7 +61,11 @@ export class StreamingService {
     audioTrack?: number,
   ) {
     const session = this.playback.describe(account, sessionId, now),
-      position = session.positionMs;
+      position = session.positionMs,
+      boundary = Math.min(
+        session.scheduleUpdate?.atMs ?? Infinity,
+        session.context?.airing.endMs ?? Infinity,
+      );
     const entries = this.store.db
       .prepare(
         "SELECT * FROM schedule_entries WHERE revision_id=? AND end_ms>? AND start_ms<? ORDER BY start_ms LIMIT 200",
@@ -69,7 +73,7 @@ export class StreamingService {
       .all(
         session.revisionId,
         Math.max(0, position - 8000),
-        position + 20000,
+        Math.min(position + 20000, boundary),
       ) as unknown as Entry[];
     invariant(entries.length, 404, "No scheduled intervals available");
     const first = entries[0]!,
@@ -109,7 +113,7 @@ export class StreamingService {
       for (
         let start =
           entry.start_ms + (entry.id === first.id ? index * segmentMs : 0);
-        start < entry.end_ms && start < position + 20000;
+        start < entry.end_ms && start < Math.min(position + 20000, boundary);
         start += segmentMs
       ) {
         const duration = Math.min(segmentMs, entry.end_ms - start);
@@ -154,6 +158,8 @@ export class StreamingService {
       )
       .run(direct ? "direct" : "hls", session.playback.entry.id, sessionId);
     return {
+      revisionId: session.revisionId,
+      entryId: session.playback.entry.id,
       mode: direct ? "direct" : "hls",
       url: direct
         ? `/api/profiles/${session.profileId}/media/${item.id}/file`
@@ -219,7 +225,12 @@ export class StreamingService {
         start < entry.end_ms &&
         (start - entry.start_ms) % segmentMs === 0 &&
         start >= session.positionMs - 12000 &&
-        start <= session.positionMs + 24000,
+        start <= session.positionMs + 24000 &&
+        entry.end_ms <=
+          Math.min(
+            session.scheduleUpdate?.atMs ?? Infinity,
+            session.context?.airing.endMs ?? Infinity,
+          ),
       404,
       "Playback segment unavailable",
     );
@@ -235,6 +246,11 @@ export class StreamingService {
           .get(item.id) as unknown as Media;
       invariant(
         current.revisionId === session.revisionId &&
+          entry.end_ms <=
+            Math.min(
+              current.scheduleUpdate?.atMs ?? Infinity,
+              current.context?.airing.endMs ?? Infinity,
+            ) &&
           fresh.available &&
           fresh.size === entry.source_size &&
           fresh.mtime_ms === entry.source_mtime_ms &&

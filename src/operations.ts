@@ -103,17 +103,20 @@ export class OperationsService {
       .all();
     const schedules = this.store.db
       .prepare(
-        "SELECT c.id,c.name,MAX(e.end_ms) AS coverageEndMs FROM channels c LEFT JOIN active_schedules a ON a.channel_id=c.id LEFT JOIN schedule_entries e ON e.revision_id=a.revision_id WHERE c.archived=0 GROUP BY c.id ORDER BY c.name,c.id LIMIT 1000",
+        "SELECT c.id,c.name,MAX(e.end_ms) AS coverageEndMs,r.config_json IS NOT NULL AND json_array_length(r.config_json,'$.groups')=0 AS emptyProgramming FROM channels c LEFT JOIN active_schedules a ON a.channel_id=c.id LEFT JOIN schedule_revisions r ON r.id=a.revision_id LEFT JOIN schedule_entries e ON e.revision_id=a.revision_id WHERE c.archived=0 GROUP BY c.id ORDER BY c.name,c.id LIMIT 1000",
       )
       .all()
-      .map((row) => ({
+      .map(({ emptyProgramming, ...row }) => ({
         ...row,
         state:
-          row.coverageEndMs == null
-            ? "unpublished"
-            : Number(row.coverageEndMs) <= now
-              ? "expired"
-              : "ready",
+          emptyProgramming &&
+          (row.coverageEndMs == null || Number(row.coverageEndMs) <= now)
+            ? "empty"
+            : row.coverageEndMs == null
+              ? "unpublished"
+              : Number(row.coverageEndMs) <= now
+                ? "expired"
+                : "ready",
       }));
     return {
       checkedMs: now,

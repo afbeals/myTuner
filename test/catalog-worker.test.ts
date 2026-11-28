@@ -510,3 +510,114 @@ test("an immediate same-page remount queues behind cancelled work and keeps the 
     secondHold.release();
   }
 });
+
+test("production catalog worker supports the main-page hierarchy without changing raw folder or selector results", async (t) => {
+  const f = await fixture(t),
+    tv = source(f.store, "/synthetic-shows", "shows"),
+    custom = source(f.store, "/synthetic-custom");
+  for (const src of [tv, custom])
+    f.store.db
+      .prepare("INSERT INTO source_grants VALUES(?,?,'')")
+      .run(f.profileId, src.id);
+  const episode = media(f.store, tv.id, "Show/Season 1/episode.mp4");
+  f.store.db.prepare("UPDATE media SET metadata_json=? WHERE id=?").run(
+    JSON.stringify({
+      seriesId: 8,
+      seriesTitle: "Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    }),
+    episode.id,
+  );
+  media(f.store, tv.id, "Show/Featurettes/interview.mp4");
+  media(f.store, custom.id, "Home/Featurettes/clip.mp4");
+  const reader = f.service(),
+    scope = { search: "", kind: "all", offset: 0, limit: 100 };
+  const raw = await reader.libraryPage(f.owner, f.profileId, scope);
+  const main = await reader.libraryPage(f.owner, f.profileId, {
+    ...scope,
+    topLevel: true,
+  });
+  assert.equal(main.shows.length, 1);
+  assert.equal(main.shows[0]!.key, "series:8");
+  assert.deepEqual(
+    main.folders.map((folder) => folder.directory),
+    ["Home"],
+  );
+  assert.equal(main.pagination.total, 3);
+  assert.ok(
+    raw.folders.some((folder) => folder.directory.endsWith("Featurettes")),
+  );
+  assert.deepEqual(await reader.libraryPage(f.owner, f.profileId, scope), raw);
+  const tree = await reader.treePage(f.owner, f.profileId, {
+    sourceId: tv.id,
+    parent: "Show",
+    mode: "folders",
+    search: "",
+    recursive: false,
+    offset: 0,
+    limit: 50,
+  });
+  assert.ok(tree.items.some((node) => node.path === "Show/Featurettes"));
+  const selection = await reader.selectionPage(f.owner, f.profileId, {
+    selection: {
+      type: "show",
+      sourceId: tv.id,
+      key: "series:8",
+      includeSpecials: false,
+    },
+    includeUnavailable: false,
+    offset: 0,
+    limit: 50,
+    search: "",
+  });
+  assert.deepEqual(
+    selection.items.map((item) => item.id),
+    [episode.id],
+  );
+});
+
+test("worker separates admin inspection from profile scope and rechecks source grants and current roles", async (t) => {
+  const f = await fixture(t),
+    admin = account(f.store, "admin"),
+    empty = profile(f.store, admin),
+    reader = f.service(),
+    base = { search: "", kind: "all", topLevel: true, offset: 0, limit: 50 };
+  const [scoped, all] = await Promise.all([
+    reader.libraryPage(admin, empty, { ...base, access: "profile" }),
+    reader.libraryPage(admin, empty, { ...base, access: "all" }),
+  ]);
+  assert.equal(scoped.pagination.total, 0);
+  assert.equal(all.movies.length, 1);
+  assert.equal(all.movies[0]!.profileAllowed, false);
+  assert.equal(
+    f.store.db
+      .prepare("SELECT COUNT(*) n FROM source_grants WHERE profile_id=?")
+      .get(empty)!.n,
+    0,
+  );
+  await assert.rejects(
+    reader.libraryPage(f.owner, f.profileId, { ...base, access: "all" }),
+    /Administrator access/,
+  );
+  f.store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'Visible')")
+    .run(empty, f.src.id);
+  assert.throws(() => reader.assertCurrent(all, admin, empty), /changed/);
+  const allowed = await reader.libraryPage(admin, empty, {
+    ...base,
+    access: "profile",
+  });
+  assert.deepEqual(
+    allowed.movies.map((item) => item.id),
+    [f.item.id],
+  );
+  assert.equal(allowed.movies[0]!.profileAllowed, true);
+  f.store.db
+    .prepare("UPDATE accounts SET role='editor' WHERE id=?")
+    .run(admin.id);
+  await assert.rejects(
+    reader.libraryPage(admin, empty, { ...base, access: "all" }),
+    /Administrator access/,
+  );
+});

@@ -236,6 +236,11 @@ ALTER TABLE sessions ADD last_used_ms INTEGER;`,
 );
 INSERT INTO storage_safety_state(id,cleanup_disabled) VALUES(1,0);
 CREATE TABLE protected_source_roots(path TEXT PRIMARY KEY);`,
+  `ALTER TABLE playback_sessions ADD pending_revision_id TEXT REFERENCES schedule_revisions(id);
+ALTER TABLE playback_sessions ADD pending_at_ms INTEGER CHECK((pending_at_ms IS NULL)=(pending_revision_id IS NULL));
+ALTER TABLE playback_sessions ADD state_version INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX playback_by_channel ON playback_sessions(channel_id);
+CREATE INDEX playback_by_pending_revision ON playback_sessions(pending_revision_id);`,
 ];
 
 export const schemaVersion = migrations.length;

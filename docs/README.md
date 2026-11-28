@@ -1,6 +1,6 @@
 # myTuner documentation
 
-This is the entry point for the standalone personal TV project. Server/browser and native 0.3.0 / schema 21 include the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. The current UI overhaul includes My Network, the channel wizard, temporary exact-video tray, shared folder trees and staged configuration. Earlier local checks are historical evidence; current-build verification and independent review are recorded separately. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
+This is the entry point for the standalone personal TV project. Server/browser and native 0.3.1 / schema 22 include the server, approved browser manager/player, native Android/Fire OS TV POC and subtitle/storage/recovery services. The current UI overhaul includes My Network, the channel wizard, temporary exact-video tray, shared folder trees and staged configuration. Earlier local checks are historical evidence; current-build verification and independent review are recorded separately. The owner deferred remaining emulator verification. Read [verification](VERIFICATION.md) for exact results and [differed](differed.md) for emulator, Windows Docker/Unraid, physical-device and human follow-ups.
 
 See [Windows Docker acceptance](WINDOWS_DOCKER.md), [Unraid/TV pilot gates](PILOT_ACCEPTANCE.md) and [the 58-frame implementation inventory](DESIGN_COVERAGE.md) for the current delivery work.
 
@@ -89,3 +89,8 @@ The [three-reviewer workflow review](UI_UX_WORKFLOW_REVIEW.md) records independe
 - [Reset application data safely](OPERATIONS.md#reset-application-data-offline): administrator review, stopped-server execution, private confirmation, verified backup and Unraid instructions.
 - [Reset safety and independent reviews](RESET_SAFETY_REVIEW.md): two-round destructive-test evidence, file-preservation boundaries and remaining review work.
 - [Walkthrough fix coverage](UI_UX_FIX_COVERAGE.md): every confirmed workflow/scenario finding mapped to implementation and regression evidence.
+
+- [Commercial folder/clip selection proposal](COMMERCIAL_SELECTION_PLAN.md): researched multi-folder or exact-clip picker, bounded catalog APIs, grant enforcement and implementation phases. Research only; not implemented.
+- [Content-only live-guide proposal](CONTENT_ONLY_LIVE_GUIDE_PLAN.md): researched one-content-block-per-airing projection while preserving actual ads and detailed creation previews. Research only; not implemented.
+
+- [Delayed-playback schedule updates](PLAYBACK_UPDATES.md): research, implemented automatic complete-airing handovers, canonical broadcast timing, legacy-session recovery and regression plan.

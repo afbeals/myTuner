@@ -1,5 +1,6 @@
 import type { Store } from "./database.js";
 import type { Account } from "./domain.js";
+import { profileLibraryActor } from "./security.js";
 import {
   browseLibrarySummary,
   hydrateLibraryMovies,
@@ -13,18 +14,26 @@ export function browseLibraryPage(
   input: {
     search: string;
     titleOnly?: boolean;
+    topLevel?: boolean;
+    access?: "profile" | "all";
     sourceId?: string | undefined;
     kind: string;
     offset: number;
     limit: number;
   },
 ) {
+  if (input.access)
+    account = profileLibraryActor(store, account, profileId, input.access);
   const library = browseLibrarySummary(
     store,
     account,
     profileId,
     input.titleOnly ? "" : input.search,
     input.sourceId,
+    {
+      topLevel: input.topLevel ?? false,
+      annotateAccess: Boolean(input.access),
+    },
   );
   const sourceKinds = new Map(library.sources.map((s) => [s.id, s.kind]));
   const refs: {
@@ -66,9 +75,15 @@ export function browseLibraryPage(
     name: string;
     count: number;
     ownerAccountId: string;
+    profileAllowed?: boolean;
   }[] = [];
   if (!input.sourceId && (input.kind === "all" || input.kind === "collections"))
-    for (const row of collectionSummaries(store, account, profileId)) {
+    for (const row of collectionSummaries(
+      store,
+      account,
+      profileId,
+      Boolean(input.access),
+    )) {
       if (
         input.search &&
         !row.name.toLocaleLowerCase().includes(input.search.toLocaleLowerCase())

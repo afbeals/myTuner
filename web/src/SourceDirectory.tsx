@@ -194,7 +194,7 @@ function TreeDirectoryField({
           identity={`${profileId}:${sourceId}:${version}`}
           title={label}
           rootLabel="Source"
-          load={catalogDirectoryLoader(profileId, sourceId)}
+          load={catalogDirectoryLoader(profileId, sourceId, "all")}
           initial={[value]}
           onApply={(paths) => {
             setValue(paths[0] ?? "");

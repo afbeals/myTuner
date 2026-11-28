@@ -86,3 +86,15 @@ The selected 8k+ improvement is implemented locally in schema 19; it is no longe
 - [ ] Measure Linux worker/process memory and HDD shutdown under load. Worker heap settings and the 64 MiB compact budget are not container-wide RAM limits.
 
 Still optional: off-peak background windows to protect workloads beyond myTuner playback; a live filesystem folder browser for unscanned directories; a durable generated-output accounting ledger if reconciliation remains a measured bottleneck; additional search indexes/FTS only after measurement. No new work on these is implied by the completed path check.
+
+## Delayed-playback handover acceptance — schema 22
+
+- [ ] On the existing Windows Docker/Unraid setup, validate a paused viewer through repeated publications, including a new commercial pattern and deliberately empty programming; delay must remain unchanged and current original breaks must finish.
+- [ ] Measure actual HLS full-airing boundary startup under shared CPU/HDD/network load; bounded next-airing prefetch can introduce normal conversion latency. No seamlessness claim is made from service tests alone.
+- [ ] On updated physical TV/Fire OS clients, verify automatic handover, captions/audio, remote focus, negotiation races and the legacy-session Go Live message. Existing emulator deferral remains; no additional host installations are authorized.
+- [ ] Retain the pre-schema-22 database/key backup for rollback; an older image cannot directly open the migrated database.
+
+## Paused picture on the physical TV — local implementation complete
+
+- [ ] Update the native APK and check Pause/Play/Play-Pause with the bottom controls hidden. The last frame, program/progress message and resume hint should remain on the picture; Resume/Go Live/channel/profile changes must not retain an obsolete frame.
+- [ ] Confirm readable SurfaceView capture on the exact TV/Fire OS API level, including 4K/portrait/letterboxed media and a slow or failed capture. API 23 SurfaceView and unavailable capture have an intentional message-only fallback. No claim of physical PixelCopy verification is made by the 35 passing JVM tests.

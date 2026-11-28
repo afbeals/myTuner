@@ -697,7 +697,7 @@ test("new channel and permanent deletion enforce ownership, visibility and retai
     .prepare("UPDATE channels SET archived=1 WHERE id=?")
     .run(f.draft.draftId);
   const retained = channelDependencies(f.store, f.owner, f.draft.draftId);
-  assert.equal(retained.canDelete, false);
+  assert.equal(retained.canDelete, true);
   assert.equal(retained.counts.schedules, 1);
 });
 test("indexed folder and file search keep literal matching, direct-child scope and source identities", async (t) => {
@@ -947,4 +947,273 @@ test("folder request deadlines return promptly while retaining admission for unc
     await browser.stop();
     store.close();
   }
+});
+
+test("empty channel wizard creation remains read-only until submission and retains an editable empty config", (t) => {
+  const f = draftFixture(t),
+    draft = { ...f.draft, config: { ...f.draft.config, groups: [] } };
+  const preview = previewNewChannel(
+    f.store,
+    f.owner,
+    f.programming,
+    draft,
+    1000,
+  );
+  assert.deepEqual(preview.entries, []);
+  assert.equal(preview.total, 0);
+  assert.equal(
+    f.store.db.prepare("SELECT id FROM channels WHERE id=?").get(draft.draftId),
+    undefined,
+  );
+  createNewChannel(
+    f.store,
+    f.owner,
+    f.programming,
+    draft,
+    preview.revision,
+    1000,
+  );
+  assert.deepEqual(
+    JSON.parse(f.programming.active(draft.draftId)!.config_json!).groups,
+    [],
+  );
+  assert.equal(
+    createNewChannel(f.store, f.owner, f.programming, draft, preview.revision)
+      .created,
+    false,
+  );
+});
+
+test("archived deletion purges only the named channel records and leaves media, collections and all files intact", async (t) => {
+  const { mkdtemp, mkdir, writeFile, readFile, stat, rm } =
+    await import("node:fs/promises");
+  const { join } = await import("node:path"),
+    { tmpdir } = await import("node:os");
+  const root = await mkdtemp(join(tmpdir(), "mytuner-channel-delete-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const f = draftFixture(t),
+    ch = channel(f.store, f.owner),
+    sibling = channel(f.store, f.owner);
+  const files = [
+    "media/video.mp4",
+    "media/video.nfo",
+    "media/subtitles/video.srt",
+    "generated/preview.jpg",
+    "cache/segment.ts",
+    "data/backups/snapshot.db",
+    "data/unknown.txt",
+  ];
+  for (const file of files) {
+    await mkdir(join(root, file, ".."), { recursive: true });
+    await writeFile(join(root, file), `synthetic:${file}`);
+  }
+  f.store.db
+    .prepare("UPDATE sources SET root_path=? WHERE id=?")
+    .run(join(root, "media"), f.src.id);
+  f.store.db
+    .prepare("UPDATE media SET relative_path='video.mp4' WHERE id=?")
+    .run(f.item.id);
+  f.store.db
+    .prepare("UPDATE source_grants SET subtree='' WHERE profile_id=?")
+    .run(f.profileId);
+  const snapshots = await Promise.all(
+    files.map(async (file) => ({
+      body: await readFile(join(root, file)),
+      info: await stat(join(root, file)),
+    })),
+  );
+  const config = {
+    ...f.draft.config,
+    groups: [
+      {
+        ...f.draft.config.groups[0]!,
+        selection: { type: "media" as const, ids: [f.item.id] },
+      },
+    ],
+  };
+  const published = f.programming.publish(f.owner, ch.id, config, 1000, 120000);
+  f.programming.publish(f.owner, sibling.id, config, 1000, 120000);
+  const { PlaybackService } = await import("../src/playback.js"),
+    playback = new PlaybackService(f.store, f.programming);
+  for (const target of [ch, sibling]) {
+    const session = playback.join(f.owner, f.profileId, target.id, 1001);
+    f.store.db
+      .prepare("INSERT INTO subscriptions(profile_id,channel_id) VALUES(?,?)")
+      .run(f.profileId, target.id);
+    f.store.db
+      .prepare(
+        "INSERT INTO playback_events(id,session_id,account_id,channel_id,entry_id,start_ms,end_ms,created_ms) VALUES(?,?,?,?,?,1000,1100,1200)",
+      )
+      .run(
+        randomUUID(),
+        session.id,
+        f.owner.id,
+        target.id,
+        session.playback!.entry.id,
+      );
+    f.store.db
+      .prepare(
+        "INSERT INTO problem_reports(id,account_id,request_id,profile_id,channel_id,media_id,created_ms,summary_json) VALUES(?,?,?,?,?,?,1200,'{}')",
+      )
+      .run(
+        randomUUID(),
+        f.owner.id,
+        randomUUID(),
+        f.profileId,
+        target.id,
+        f.item.id,
+      );
+  }
+  const collection = saveCollection(
+    f.store,
+    f.owner,
+    f.profileId,
+    "Keep collection",
+    [f.item.id],
+  );
+  f.store.db
+    .prepare(
+      "INSERT INTO generated_assets(id,media_id,kind,fingerprint,relative_path) VALUES(?,?,'thumbnail','keep','preview.jpg')",
+    )
+    .run(randomUUID(), f.item.id);
+  const tables = [
+    "channels",
+    "channel_items",
+    "subscriptions",
+    "schedule_revisions",
+    "schedule_entries",
+    "active_schedules",
+    "rotation_state",
+    "schedule_checkpoints",
+    "playback_sessions",
+    "playback_events",
+    "problem_reports",
+    "media",
+    "sources",
+    "collections",
+    "collection_items",
+    "generated_assets",
+  ];
+  const before = new Map(
+    tables.map((table) => [
+      table,
+      f.store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+    ]),
+  );
+  f.store.db.prepare("UPDATE channels SET archived=1 WHERE id=?").run(ch.id);
+  const impact = channelDependencies(f.store, f.owner, ch.id);
+  assert.equal(impact.canDelete, true);
+  assert.equal(impact.counts.playback, 1);
+  assert.equal(impact.counts.history, 1);
+  assert.equal(impact.counts.reports, 1);
+  assert.equal(impact.counts.schedules, 1);
+  assert.ok(impact.counts.entries! > 0);
+  assert.throws(
+    () =>
+      permanentlyDeleteChannel(
+        f.store,
+        account(f.store),
+        ch.id,
+        impact.revision,
+      ),
+    /not found/,
+  );
+  // A database refusal must roll back children deleted earlier in the transaction.
+  f.store.db.exec(
+    "CREATE TEMP TRIGGER refuse_channel_delete BEFORE DELETE ON channels BEGIN SELECT RAISE(ABORT,'synthetic delete refusal'); END",
+  );
+  assert.throws(
+    () => permanentlyDeleteChannel(f.store, f.owner, ch.id, impact.revision),
+    /synthetic delete refusal/,
+  );
+  for (const table of tables.filter((table) => table !== "channels"))
+    assert.deepEqual(
+      f.store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+      before.get(table),
+      table,
+    );
+  f.store.db.exec("DROP TRIGGER refuse_channel_delete");
+  // Even a same-count schedule edit invalidates the reviewed deletion.
+  f.store.db
+    .prepare(
+      "UPDATE schedule_revisions SET config_json=json_set(config_json,'$.seed',43) WHERE id=?",
+    )
+    .run(published.revisionId);
+  assert.throws(
+    () => permanentlyDeleteChannel(f.store, f.owner, ch.id, impact.revision),
+    /changed/,
+  );
+  const fresh = channelDependencies(f.store, f.admin, ch.id);
+  permanentlyDeleteChannel(f.store, f.admin, ch.id, fresh.revision);
+  for (const table of [
+    "channels",
+    "channel_items",
+    "subscriptions",
+    "schedule_revisions",
+    "schedule_entries",
+    "active_schedules",
+    "rotation_state",
+    "playback_sessions",
+    "playback_events",
+    "problem_reports",
+  ]) {
+    const key = table === "channels" ? "id" : "channel_id";
+    assert.equal(
+      f.store.db
+        .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${key}=?`)
+        .get(ch.id)!.n,
+      0,
+      table,
+    );
+    const rows = before.get(table)! as Record<string, unknown>[];
+    assert.deepEqual(
+      f.store.db
+        .prepare(`SELECT * FROM ${table} WHERE ${key}=? ORDER BY rowid`)
+        .all(sibling.id),
+      rows.filter((row) => row[key] === sibling.id),
+      `${table} sibling`,
+    );
+  }
+  assert.equal(
+    f.store.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM schedule_checkpoints WHERE revision_id=?",
+      )
+      .get(published.revisionId)!.n,
+    0,
+  );
+  for (const table of [
+    "media",
+    "sources",
+    "collections",
+    "collection_items",
+    "generated_assets",
+  ])
+    assert.deepEqual(
+      f.store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),
+      before.get(table),
+      table,
+    );
+  assert.ok(
+    f.store.db
+      .prepare("SELECT id FROM collections WHERE id=?")
+      .get(collection.id),
+  );
+  assert.deepEqual(f.store.db.prepare("PRAGMA foreign_key_check").all(), []);
+  assert.equal(
+    f.store.db.prepare("PRAGMA integrity_check").get()!.integrity_check,
+    "ok",
+  );
+  await Promise.all(
+    files.map(async (file, index) => {
+      assert.deepEqual(
+        await readFile(join(root, file)),
+        snapshots[index]!.body,
+        file,
+      );
+      const actual = await stat(join(root, file));
+      assert.equal(actual.ino, snapshots[index]!.info.ino, file);
+      assert.equal(actual.mtimeMs, snapshots[index]!.info.mtimeMs, file);
+    }),
+  );
 });

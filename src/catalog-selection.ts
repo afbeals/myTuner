@@ -3,11 +3,18 @@ import type { Store } from "./database.js";
 import type { Account } from "./domain.js";
 import { invariant } from "./domain.js";
 import type { Selection } from "./contracts.js";
-import { requireProfile, normalizeSubtree } from "./security.js";
+import {
+  requireProfile,
+  normalizeSubtree,
+  profileLibraryActor,
+  canBypassMediaGrants,
+  createProfileMediaAuthorizer,
+} from "./security.js";
 import { requireCatalogProjection } from "./catalog-projection.js";
 import type { CompactMedia } from "./display-metadata.js";
 export type SelectionPageInput = {
   selection: Selection;
+  access?: "profile" | "all" | undefined;
   includeUnavailable: boolean;
   offset: number;
   limit: number;
@@ -22,6 +29,7 @@ export type TreePageInput = {
   recursive: boolean;
   mode: "folders" | "files";
   includeCommercials?: boolean;
+  access?: "profile" | "all" | undefined;
 };
 const functions = new WeakSet<object>();
 function registerFunctions(store: Store) {
@@ -62,11 +70,10 @@ function access(store: Store, account: Account, profileId: string) {
   registerFunctions(store);
   const state = requireCatalogProjection(store);
   return {
-    where:
-      account.role === "admin"
-        ? "1=1"
-        : "EXISTS(SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=p.source_id AND (g.subtree='' OR p.relative_path=g.subtree OR substr(p.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))",
-    parameters: account.role === "admin" ? [] : [profileId],
+    where: canBypassMediaGrants(account, profileId)
+      ? "1=1"
+      : "EXISTS(SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=p.source_id AND (g.subtree='' OR p.relative_path=g.subtree OR substr(p.relative_path,1,length(g.subtree)+1)=g.subtree||'/'))",
+    parameters: canBypassMediaGrants(account, profileId) ? [] : [profileId],
     generation: state.generation,
     revision: state.revision,
   };
@@ -105,7 +112,7 @@ function selectionConditions(
       404,
       "Collection not found",
     );
-    if (account.role !== "admin") {
+    if (!canBypassMediaGrants(account, profileId)) {
       const hidden = store.db
         .prepare(
           "SELECT 1 FROM collection_items c JOIN media m ON m.id=c.media_id WHERE c.collection_id=? AND NOT EXISTS(SELECT 1 FROM source_grants g WHERE g.profile_id=? AND g.source_id=m.source_id AND(g.subtree='' OR m.relative_path=g.subtree OR substr(m.relative_path,1,length(g.subtree)+1)=g.subtree||'/')) LIMIT 1",
@@ -159,6 +166,11 @@ export function browseSelectionPage(
   profileId: string,
   input: SelectionPageInput,
 ) {
+  if (input.access)
+    account = profileLibraryActor(store, account, profileId, input.access);
+  const profileCanRead = input.access
+    ? createProfileMediaAuthorizer(store, profileId)
+    : null;
   const filter = selectionConditions(
     store,
     account,
@@ -196,6 +208,14 @@ export function browseSelectionPage(
         relativePath: item.relativePath,
         durationMs: Number(row.duration_ms),
         available: Boolean(item.available),
+        ...(profileCanRead
+          ? {
+              profileAllowed: profileCanRead({
+                source_id: item.sourceId,
+                relative_path: item.relativePath,
+              }),
+            }
+          : {}),
         metadata: {
           seriesTitle: item.seriesTitle,
           seasonNumber: item.sourceKind === "shows" ? item.season : undefined,
@@ -217,6 +237,8 @@ export function browseCatalogTree(
   profileId: string,
   input: TreePageInput,
 ) {
+  if (input.access)
+    account = profileLibraryActor(store, account, profileId, input.access);
   const scope = access(store, account, profileId),
     parent = normalizeSubtree(input.parent),
     prefix = parent ? `${parent}/` : "";

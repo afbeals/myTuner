@@ -163,6 +163,7 @@ export function channelDependencies(
   for (const [name, sql] of Object.entries({
     schedules:
       "SELECT COUNT(*) AS n FROM schedule_revisions WHERE channel_id=?",
+    entries: "SELECT COUNT(*) AS n FROM schedule_entries WHERE channel_id=?",
     playback: "SELECT COUNT(*) AS n FROM playback_sessions WHERE channel_id=?",
     reports: "SELECT COUNT(*) AS n FROM problem_reports WHERE channel_id=?",
     history: "SELECT COUNT(*) AS n FROM playback_events WHERE channel_id=?",
@@ -170,10 +171,18 @@ export function channelDependencies(
   }))
     counts[name] = Number(store.db.prepare(sql).get(id)!.n);
   return {
-    revision: hash([channel, counts]),
+    revision: hash([
+      channel,
+      counts,
+      store.db
+        .prepare(
+          "SELECT id,config_json FROM schedule_revisions WHERE channel_id=? ORDER BY id",
+        )
+        .all(id),
+    ]),
+    name: String(channel.name),
     archived: Boolean(channel.archived),
-    canDelete:
-      Boolean(channel.archived) && Object.values(counts).every((n) => n === 0),
+    canDelete: Boolean(channel.archived),
     counts,
   };
 }
@@ -193,9 +202,21 @@ export function permanentlyDeleteChannel(
     invariant(
       current.canDelete,
       409,
-      "Archive this channel first. Retained schedules, playback history, reports and subscriptions must be cleared through their normal retention policies before permanent deletion.",
+      "Archive this channel before permanently deleting it.",
     );
-    for (const table of ["channel_items", "rotation_state"])
+    // No filesystem operations: originals, sidecars, assets, collections and backups stay intact.
+    // schedule_checkpoints cascade with their owning revision.
+    for (const table of [
+      "playback_events",
+      "problem_reports",
+      "playback_sessions",
+      "subscriptions",
+      "active_schedules",
+      "schedule_entries",
+      "schedule_revisions",
+      "channel_items",
+      "rotation_state",
+    ])
       store.db.prepare(`DELETE FROM ${table} WHERE channel_id=?`).run(id);
     store.db.prepare("DELETE FROM channels WHERE id=?").run(id);
     return { deleted: true };

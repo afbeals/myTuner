@@ -885,7 +885,7 @@ for (const boundary of ["logout", "expiry"] as const) {
     ).toHaveCount(0);
     await expect(
       editor.getByRole("button", { name: "Next", exact: true }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     expect(bobPrivateResponses).toBe(0);
   });
 }

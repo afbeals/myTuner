@@ -426,10 +426,11 @@ function TreeMount({
 export function catalogDirectoryLoader(
   profileId: string,
   sourceId: string,
+  access: "profile" | "all" = "profile",
 ): DirectoryLoader {
   return (parent, offset, signal) =>
     api<DirectoryPage>(
-      `/api/profiles/${profileId}/catalog/tree?${new URLSearchParams({ sourceId, parent, offset: String(offset), limit: "50", mode: "folders" })}`,
+      `/api/profiles/${profileId}/catalog/tree?${new URLSearchParams({ sourceId, parent, offset: String(offset), limit: "50", mode: "folders", access })}`,
       "GET",
       undefined,
       signal,

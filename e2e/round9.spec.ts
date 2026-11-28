@@ -1,7 +1,7 @@
 import { selectInitialProfile } from "./workspace";
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import type { Source, Programming } from "../web/src/types";
+import type { Source, Programming, Playback } from "../web/src/types";
 test.use({ baseURL: "http://127.0.0.1:8786" });
 
 async function mutate(
@@ -35,7 +35,11 @@ async function get(page: Page, path: string) {
     return response.json();
   }, path);
 }
-async function fixture(page: Page, name: string) {
+async function fixture(
+  page: Page,
+  name: string,
+  filename = "Orbit.S01E01.mp4",
+) {
   await page.goto("/");
   await page.getByLabel("Username", { exact: true }).fill("designer");
   await page
@@ -58,7 +62,7 @@ async function fixture(page: Page, name: string) {
     recursive: true,
   });
   const item = selected.items.find((i: { path: string }) =>
-    i.path.endsWith("Orbit.S01E01.mp4"),
+    i.path.endsWith(filename),
   );
   const ch = await mutate(page, "/api/channels", "POST", {
     name,
@@ -114,7 +118,8 @@ async function frozenPicture(page: Page) {
   const frame = await video.getAttribute("poster");
   // Compare actual screenshot pixels with the decoded poster, not just its URL.
   const shot = await video.screenshot({
-    style: ".player-overlay, .video-status { visibility: hidden; }",
+    style:
+      ".player-overlay, .video-status, .paused-status { visibility: hidden; }",
   });
   const pixels = await video.evaluate(
     async (el: HTMLVideoElement, png: string) => {
@@ -206,6 +211,10 @@ for (const mode of ["direct", "hls"] as const)
       );
       await playing(page);
     }
+    await page
+      .getByRole("button", { name: "Hide controls", exact: true })
+      .click();
+    await expect(page.locator(".player-overlay")).toBeHidden();
     let mediaRequests = 0,
       negotiations = 0;
     page.on("request", (r) => {
@@ -227,10 +236,36 @@ for (const mode of ["direct", "hls"] as const)
           { times: 1 },
         );
       const before = negotiations;
-      await page.getByRole("button", { name: "Pause", exact: true }).click();
+      await page.evaluate(() =>
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "MediaPause", bubbles: true }),
+        ),
+      );
+      const status = page.getByRole("status", {
+        name: "Paused playback",
+        exact: true,
+      });
+      await expect(status).toBeVisible();
       await expect(
-        page.getByRole("button", { name: "Resume", exact: true }),
+        page.getByRole("button", {
+          name: "Resume",
+          exact: true,
+          includeHidden: true,
+        }),
       ).toBeEnabled();
+      await expect(status).toContainText("The Last Platform");
+      if (!lost) await expect(page.locator(".player-overlay")).toBeHidden();
+      const inside = await status.evaluate((el) => {
+        const text = el.getBoundingClientRect(),
+          picture = el.closest(".picture-surface")!.getBoundingClientRect();
+        return (
+          text.top >= picture.top &&
+          text.bottom <= picture.bottom &&
+          text.left >= picture.left &&
+          text.right <= picture.right
+        );
+      });
+      expect(inside).toBe(true);
       await expect(page.locator(".video-status")).toHaveCount(0);
       const frame = await frozenPicture(page),
         requests = mediaRequests;
@@ -238,18 +273,106 @@ for (const mode of ["direct", "hls"] as const)
       expect(mediaRequests).toBe(requests);
       expect(negotiations).toBe(before);
       await expect(page.locator("video")).toHaveAttribute("poster", frame!);
-      await page.getByRole("button", { name: "Resume", exact: true }).click();
+      await page.evaluate(() =>
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "MediaPlay", bubbles: true }),
+        ),
+      );
       await playing(page);
+      await expect(
+        page.getByRole("status", { name: "Paused playback", exact: true }),
+      ).toHaveCount(0);
       await expect(page.locator("video")).not.toHaveAttribute("poster", /.+/);
     }
-    await page.getByRole("button", { name: "Pause", exact: true }).click();
+    await page.evaluate(() =>
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "MediaPause", bubbles: true }),
+      ),
+    );
     await expect(
-      page.getByRole("button", { name: "Resume", exact: true }),
-    ).toBeEnabled();
+      page.getByRole("status", { name: "Paused playback", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Show controls", exact: true })
+      .click();
     await page.getByRole("button", { name: "Go Live", exact: true }).click();
     await playing(page);
     await expect(page.locator("video")).not.toHaveAttribute("poster", /.+/);
   });
+
+test("hidden-controls pause is visible on the retained picture on desktop, narrow and fullscreen", async ({
+  page,
+}) => {
+  const stable = (data: Playback) => {
+    if (data.paused && data.context)
+      data.context.airing = {
+        ...data.context.airing,
+        contentElapsedMs: 3000,
+        contentDurationMs: 8000,
+      };
+    return data;
+  };
+  await page.route(
+    /\/api\/playback\/sessions\/[^/]+(?:\/pause)?$/,
+    async (route) => {
+      if (!["GET", "POST"].includes(route.request().method()))
+        return route.continue();
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      return route.fulfill({ response, json: stable(await response.json()) });
+    },
+  );
+  const f = await fixture(page, "Paused picture proof", "Orbit.S01E02.mp4");
+  await page.goto("/#watch");
+  await page
+    .getByRole("article")
+    .filter({ hasText: f.ch.name })
+    .getByRole("button", { name: "Watch live", exact: true })
+    .click();
+  await playing(page);
+  await page
+    .getByRole("button", { name: "Hide controls", exact: true })
+    .click();
+  await page.evaluate(() =>
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "MediaPause", bubbles: true }),
+    ),
+  );
+  const status = page.getByRole("status", {
+    name: "Paused playback",
+    exact: true,
+  });
+  await expect(status).toContainText("Maple Street");
+  await expect(status).toContainText("0:03 / 0:08");
+  await expect(page.locator(".player-overlay")).toBeHidden();
+  await frozenPicture(page);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(page.locator(".picture-surface")).toHaveScreenshot(
+      `hidden-pause-picture-${width}.png`,
+    );
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Full screen", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => !!document.fullscreenElement))
+    .toBe(true);
+  expect(
+    await status.evaluate((el) => document.fullscreenElement?.contains(el)),
+  ).toBe(true);
+  await expect(status).toBeVisible();
+  await expect(page.locator(".picture-surface")).toHaveScreenshot(
+    "hidden-pause-picture-fullscreen.png",
+  );
+  await page.evaluate(() => document.exitFullscreen());
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+});
 
 test("I47 separate details saves immediately without loading programming or changing a paused session", async ({
   page,

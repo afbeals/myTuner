@@ -42,6 +42,7 @@ export interface Metadata {
   images?: { url?: string; index: number; coverType: string }[];
 }
 export interface Media {
+  profileAllowed?: boolean;
   id: string;
   sourceId: string;
   title: string;
@@ -71,6 +72,8 @@ export interface GuideChannel extends Channel {
   entries: Entry[];
 }
 export interface Playback {
+  stateVersion?: number;
+  scheduleUpdate?: { atMs: number | null; rejoinRequired: boolean } | null;
   id: string;
   profileId: string;
   channelId: string;
@@ -89,7 +92,12 @@ export interface Playback {
     kind: "program" | "commercial";
     entryDurationMs: number;
     remainingMs: number;
-    airing: { startMs: number; endMs: number };
+    airing: {
+      startMs: number;
+      endMs: number;
+      contentElapsedMs?: number;
+      contentDurationMs?: number;
+    };
     next: { title: string; startMs: number } | null;
     program: {
       title: string;
@@ -108,6 +116,8 @@ export interface Track {
   url?: string;
 }
 export interface Delivery {
+  revisionId?: string;
+  entryId?: string;
   mode: "direct" | "hls";
   url: string;
   sourceOffsetMs: number;
@@ -164,12 +174,19 @@ export interface Library {
     key: string;
     sourceId: string;
     title: string;
+    profileAllowed?: boolean;
     artwork: { mediaId: string; index: number; coverType: string }[];
     seasons: { number: number; available: number; unavailable: number }[];
   }[];
   movies: Media[];
-  folders: { sourceId: string; directory: string; available: number }[];
+  folders: {
+    sourceId: string;
+    directory: string;
+    available: number;
+    profileAllowed?: boolean;
+  }[];
   movieCollections: {
+    profileAllowed?: boolean;
     sourceId: string;
     key: string;
     title: string;
@@ -177,6 +194,7 @@ export interface Library {
   }[];
 }
 export interface Collection {
+  profileAllowed?: boolean;
   id: string;
   name: string;
   count: number;

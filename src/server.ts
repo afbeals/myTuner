@@ -973,12 +973,12 @@ export function createServer(
       (p.auth_session_hash IS NULL OR EXISTS(SELECT 1 FROM sessions s
         WHERE s.token_hash=p.auth_session_hash AND s.expires_at>?))
       AND EXISTS(SELECT 1 FROM schedule_entries e JOIN media m ON m.id=e.media_id
-        WHERE e.revision_id=p.revision_id AND m.available=1
+        WHERE e.revision_id=CASE WHEN p.pending_revision_id IS NOT NULL AND p.pending_at_ms<=p.position_ms+MAX(0,?-p.anchor_ms) THEN p.pending_revision_id ELSE p.revision_id END AND m.available=1
         AND e.source_size=m.size AND e.source_mtime_ms=m.mtime_ms
         AND e.start_ms<=p.position_ms+MAX(0,?-p.anchor_ms)
         AND e.end_ms>p.position_ms+MAX(0,?-p.anchor_ms))`,
       )
-      .all(now - 90000, now, now, now);
+      .all(now - 90000, now, now, now, now);
     // Polling an unavailable/stuck player is not evidence of disk-sensitive
     // viewing. Allow startup/resume briefly, then require actual progress.
     const active = candidates.some(
@@ -1542,7 +1542,7 @@ export function createServer(
     return (
       store.db
         .prepare(
-          "SELECT channels.*,EXISTS(SELECT 1 FROM active_schedules a WHERE a.channel_id=channels.id) AS has_programming FROM channels WHERE archived=0 AND (?='admin' OR visibility='shared' OR owner_account_id=?) ORDER BY name,id",
+          "SELECT channels.*,EXISTS(SELECT 1 FROM active_schedules a JOIN schedule_revisions r ON r.id=a.revision_id WHERE a.channel_id=channels.id AND (r.config_json IS NULL OR json_array_length(r.config_json,'$.groups')>0)) AS has_programming FROM channels WHERE archived=0 AND (?='admin' OR visibility='shared' OR owner_account_id=?) ORDER BY name,id",
         )
         .all(account.role, account.id) as unknown as Channel[]
     ).filter((channel) => {
