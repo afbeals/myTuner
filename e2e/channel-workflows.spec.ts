@@ -582,6 +582,11 @@ test("a real renamed synthetic folder identifies its empty group and requires an
       [join(root, "generated"), join(root, "cache")],
     );
     await scanSource(store, source);
+    store.db
+      .prepare(
+        "INSERT INTO source_grants(profile_id,source_id,subtree) VALUES(?,?,'')",
+      )
+      .run(profileId, source.id);
     app = createServer(store, {
       webRoot: resolve("web-dist"),
       generatedRoot: join(root, "generated"),
@@ -730,4 +735,208 @@ test("a real renamed synthetic folder identifies its empty group and requires an
     store.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("an empty channel can be created, saved again with zero groups and populated later", async ({
+  page,
+}) => {
+  await login(page);
+  await goto(page, "/#network");
+  await page
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
+  const wizard = page.getByRole("dialog", {
+    name: "Create channel",
+    exact: true,
+  });
+  const name = "Empty channel regression";
+  await wizard.getByLabel("Channel name", { exact: true }).fill(name);
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(wizard).toContainText("You can create an empty channel");
+  await expect(wizard).toHaveScreenshot("empty-channel-content-1440.png");
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard.getByRole("button", { name: "Next", exact: true }).click();
+  await wizard
+    .getByRole("button", { name: "Generate preview", exact: true })
+    .click();
+  await expect(wizard).toContainText("Preview ready");
+  await expect(wizard.locator("tbody tr")).toHaveCount(0);
+  const created = page.waitForResponse(
+    (r) =>
+      r.url().endsWith("/api/channels/drafts/publish") &&
+      r.request().method() === "POST",
+  );
+  await wizard
+    .getByRole("button", { name: "Create channel", exact: true })
+    .click();
+  const { id } = await (await created).json();
+  channels.push(id);
+  await expect(wizard).not.toBeVisible();
+  const sidebar = page.locator(".channel-preview");
+  await expect(sidebar).toContainText("No programming scheduled");
+  await sidebar
+    .getByRole("button", { name: "Edit programming", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", {
+    name: `Program ${name}`,
+    exact: true,
+  });
+  await expect(editor).toContainText("You can save this channel empty");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(editor).toHaveScreenshot("empty-channel-editor-390.png");
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Review empty programming", exact: true })
+    .click();
+  await expect(editor).toContainText("No videos or commercials are scheduled");
+  await editor
+    .getByRole("button", { name: "Save empty programming", exact: true })
+    .click();
+  await expect(editor).toContainText("Programming saved");
+  expect(
+    (await api(page, `/api/channels/${id}/programming`)).data.config.groups,
+  ).toEqual([]);
+  await editor.getByRole("button", { name: "Done", exact: true }).click();
+  await sidebar
+    .getByRole("button", { name: "Edit programming", exact: true })
+    .click();
+  await editor
+    .getByRole("button", { name: "+ Add content group", exact: true })
+    .click();
+  const picker = page.getByRole("dialog", {
+    name: "Choose programming content",
+    exact: true,
+  });
+  await picker
+    .getByRole("button", { name: /^Select / })
+    .first()
+    .click();
+  await picker
+    .getByRole("button", { name: "Use selection", exact: true })
+    .click();
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Generate two-hour preview", exact: true })
+    .click();
+  await expect(
+    editor.getByRole("button", { name: "Publish programming", exact: true }),
+  ).toBeEnabled();
+  await editor
+    .getByRole("button", { name: "Publish programming", exact: true })
+    .click();
+  await expect(editor).toContainText("Programming saved");
+  expect(
+    (await api(page, `/api/channels/${id}/programming`)).data.config.groups,
+  ).toHaveLength(1);
+  await editor.getByRole("button", { name: "Done", exact: true }).click();
+});
+
+test("the last group can be removed and an archived programmed channel can be permanently deleted after explicit impact review", async ({
+  page,
+}) => {
+  await login(page);
+  const seeded = await seedChannel(page);
+  const sourceState = (await api(page, "/api/sources")).data;
+  const sidebar = page.locator(".channel-preview");
+  await sidebar
+    .getByRole("button", { name: "Edit programming", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", {
+    name: `Program ${seeded.name}`,
+    exact: true,
+  });
+  await expect(
+    editor.getByRole("button", { name: "Remove group 1", exact: true }),
+  ).toBeVisible();
+  while (
+    await editor.getByRole("button", { name: /^Remove group \d+$/ }).count()
+  )
+    await editor
+      .getByRole("button", { name: /^Remove group \d+$/ })
+      .first()
+      .click();
+  await expect(editor).toContainText("You can save this channel empty");
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor.getByRole("button", { name: "Next", exact: true }).click();
+  await editor
+    .getByRole("button", { name: "Review empty programming", exact: true })
+    .click();
+  await editor
+    .getByRole("button", { name: "Save empty programming", exact: true })
+    .click();
+  await expect(editor).toContainText("Programming saved");
+  expect(
+    (await api(page, `/api/channels/${seeded.id}/programming`)).data.config
+      .groups,
+  ).toEqual([]);
+  await editor.getByRole("button", { name: "Done", exact: true }).click();
+  await sidebar
+    .getByRole("button", { name: "Archive channel", exact: true })
+    .click();
+  await page
+    .locator(".confirmation-dialog")
+    .getByRole("button", { name: "Continue", exact: true })
+    .click();
+  channels.splice(channels.indexOf(seeded.id), 1);
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await page.getByRole("button", { name: seeded.name, exact: true }).click();
+  await sidebar
+    .getByRole("button", {
+      name: `Permanently delete ${seeded.name}`,
+      exact: true,
+    })
+    .click();
+  const confirmation = page.locator(".confirmation-dialog");
+  await expect(confirmation).toContainText("schedule revisions");
+  await expect(confirmation).toContainText(
+    "Original videos, subtitles, metadata files",
+  );
+  await confirmation
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  expect(
+    (await api(page, `/api/channels/${seeded.id}/dependencies`)).status,
+  ).toBe(200);
+  await sidebar
+    .getByRole("button", {
+      name: `Permanently delete ${seeded.name}`,
+      exact: true,
+    })
+    .click();
+  // A renamed channel cannot be removed under a stale confirmation.
+  expect(
+    (
+      await api(page, `/api/channels/${seeded.id}`, "PATCH", {
+        name: `${seeded.name} renamed`,
+      })
+    ).status,
+  ).toBe(204);
+  await confirmation
+    .getByRole("button", { name: "Delete channel", exact: true })
+    .click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Channel changed" }),
+  ).toBeVisible();
+  expect(
+    (await api(page, `/api/channels/${seeded.id}/dependencies`)).status,
+  ).toBe(200);
+  await sidebar.getByRole("button", { name: /^Permanently delete / }).click();
+  await expect(confirmation).toContainText(`${seeded.name} renamed`);
+  const deletion = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/api/channels/${seeded.id}/permanent`) &&
+      r.request().method() === "DELETE",
+  );
+  await confirmation
+    .getByRole("button", { name: "Delete channel", exact: true })
+    .click();
+  expect((await deletion).status()).toBe(200);
+  await expect(sidebar).toContainText("Choose a channel");
+  expect(
+    (await api(page, `/api/channels/${seeded.id}/dependencies`)).status,
+  ).toBe(404);
+  expect((await api(page, "/api/sources")).data).toEqual(sourceState);
 });

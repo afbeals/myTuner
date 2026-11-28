@@ -1,6 +1,6 @@
 # myTuner: standalone personal TV network
 
-Status: server/browser and native TV client **0.3.0**, schema **21**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
+Status: server/browser and native TV client **0.3.1**, schema **22**. The standalone services and approved browser/TV POC are implemented. The 0.2.1 update repairs verification of read-only backup bundles and adds Docker release, local preview, help, progress and version checks. Current local results and container CI evidence belong in [verification](VERIFICATION.md); Windows acceptance, physical devices and remaining emulator work remain in [differed](differed.md).
 
 The completed [tenth-round code review](IMPLEMENTATION_REVIEW.md#tenth-round-findings-and-disposition) fixed two P1 issues. The owner then selected R10-04–R10-13; those corrections are locally regression-verified. The owner subsequently selected R10-03 and the five older deferred findings; all six are corrected. [Differed](differed.md) tracks the external acceptance steps.
 
@@ -112,7 +112,7 @@ Router/firewall/SSID/VLAN configuration is separate infrastructure work; retain 
 
 ## TV installation deliverable
 
-Delivery includes an installable signed TV APK, exact-model/OS validation, launcher/remote support and documented install/update steps. Follow [TV_INSTALLATION.md](TV_INSTALLATION.md) for the Bravia/Google TV and Fire OS procedures, Unraid base-address selection, browser approval, profile/PIN startup and acceptance. The current native project is version 0.3.0/code 3; current local APK checksum/signature evidence is recorded separately in VERIFICATION.md; physical-device acceptance remains open. [DESIGN_REVIEW.md](DESIGN_REVIEW.md) records the supplied Figma handoff and current API differences.
+Delivery includes an installable signed TV APK, exact-model/OS validation, launcher/remote support and documented install/update steps. Follow [TV_INSTALLATION.md](TV_INSTALLATION.md) for the Bravia/Google TV and Fire OS procedures, Unraid base-address selection, browser approval, profile/PIN startup and acceptance. The current native project is version 0.3.1/code 4; current local APK checksum/signature evidence is recorded separately in VERIFICATION.md; physical-device acceptance remains open. [DESIGN_REVIEW.md](DESIGN_REVIEW.md) records the supplied Figma handoff and current API differences.
 
 ## Implementation checkpoint
 
@@ -173,3 +173,13 @@ Schema 20 adds only the channel creation retry hash and session label/created/la
 ## Database-only reset and retained media safety — schema 21
 
 The owner selected selective database reset or fresh start retaining the explicitly authenticated administrator. Browser review includes categories/dependencies/counts and offline instructions. Actual execution requires a stopped server, exclusive ownership, administrator password, full revision, typed confirmation and a new verified append-only backup. There is no destructive HTTP endpoint, queued reset replay or physical media/output cleanup. Historical readonly roots and stricter output safety persist through reset/restore. [Operations](OPERATIONS.md#reset-application-data-offline) contains the runbook, while [reset safety](RESET_SAFETY_REVIEW.md) records the required two independent multi-agent rounds and fixes. Earlier schema-20 UI implementation sections describe their original checkpoint.
+
+## Current local 0.3.1 follow-up
+
+Zero-group channels and complete confirmed archived-channel database removal are implemented locally. Main library cards now omit nested duplicates while keeping the existing show/season modal. Library reads follow the selected profile’s grants by default, with an explicit administrator inspection toggle that never grants access. Admin-authored programming/collection saves honor those grants. Version is 0.3.1/code 4; the subsequent playback handover adds schema 22; see verification for exact results and remaining external checks.
+
+The owner requested two separate research plans: [commercial folder/clip selection](COMMERCIAL_SELECTION_PLAN.md) and [content-only live guide](CONTENT_ONLY_LIVE_GUIDE_PLAN.md). Both are proposals awaiting implementation authorization. Detailed create/edit previews continue to show scheduled commercials, including random mid-rolls; the guide proposal changes live listings only.
+
+## Automatic updates for delayed viewing — 0.3.1 / schema 22
+
+Paused and behind-live sessions now receive a persisted handover to updated shared programming after their current complete airing and its breaks. Position, pause state and delay remain unchanged. Changes still begin at their canonical broadcast timestamp: a viewer thirty minutes behind encounters a 9:00 edit around 9:30, rather than retroactively inserting new commercials into a historical airing. Publication stages compatible sessions atomically, repeated edits do not postpone a safe boundary, and bounded delivery cannot prefetch another obsolete airing. [The research and implementation plan](PLAYBACK_UPDATES.md) describes compatibility, legacy recovery, limits and test coverage. The older permanent-pinning descriptions above describe earlier behavior.

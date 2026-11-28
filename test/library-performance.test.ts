@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../src/database.js";
 import { account, profile, source, media } from "./helpers.js";
-import { browseLibrary, selectMedia } from "../src/library.js";
+import { browseLibrary, selectMedia, saveCollection } from "../src/library.js";
 import { browseLibraryPage } from "../src/library-page.js";
 import {
   createMediaProjector,
@@ -191,3 +191,276 @@ test(
     }
   },
 );
+
+test("main library hides nested folder and fallback-show cards before paging without changing selection or stored data", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const owner = account(store),
+    p = profile(store, owner),
+    tv = source(store, "/synthetic-tv", "shows"),
+    custom = source(store, "/synthetic-custom"),
+    movieSource = source(store, "/synthetic-films", "movies"),
+    hidden = source(store, "/synthetic-hidden", "shows");
+  for (const src of [tv, custom, movieSource])
+    store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, src.id);
+  const episodes = [
+    media(store, tv.id, "Orbit/Season 1/one.mp4"),
+    media(store, tv.id, "Orbit/Season 2/two.mp4"),
+  ];
+  for (const [i, item] of episodes.entries())
+    store.db.prepare("UPDATE media SET metadata_json=? WHERE id=?").run(
+      JSON.stringify({
+        seriesId: 7,
+        seriesTitle: "Orbit",
+        seasonNumber: i + 1,
+        episodeNumber: 1,
+      }),
+      item.id,
+    );
+  media(store, tv.id, "Orbit/Featurettes/interview.mp4");
+  media(store, tv.id, "Orbit/Featurettes/Behind the scenes/making-of.mp4");
+  media(store, tv.id, "Orbit/untagged.mp4");
+  const local = media(store, tv.id, "Local Show/Season 1/episode.mp4");
+  media(store, tv.id, "Local Show/Featurettes/interview.mp4");
+  media(store, tv.id, "Orbiting/Season 1/episode.mp4");
+  media(store, hidden.id, "Private Show/Season 1/private.mp4");
+  media(store, custom.id, "Family/Trips/Featurettes/clip.mp4");
+  media(store, custom.id, "Lessons/Featurettes/clip.mp4");
+  const rootVideo = media(store, custom.id, "loose.mp4"),
+    film = media(store, movieSource.id, "Film/main.mp4");
+  store.db
+    .prepare("UPDATE media SET metadata_json=? WHERE id=?")
+    .run(
+      JSON.stringify({ collection: { title: "Film set", tmdbId: 99 } }),
+      film.id,
+    );
+  const saved = saveCollection(store, owner, p, "Saved clips", [
+    local.id,
+    rootVideo.id,
+  ]);
+  const shape = {
+    search: "",
+    titleOnly: true,
+    kind: "all",
+    offset: 0,
+    limit: 100,
+  };
+  const raw = browseLibraryPage(store, owner, p, shape);
+  assert.ok(
+    raw.folders.some((folder) => folder.directory.includes("Featurettes")),
+  );
+  assert.ok(raw.shows.some((show) => show.key === "folder:Orbit/Featurettes"));
+  const before = store.db.prepare("SELECT total_changes() AS n").get()!.n;
+  const page = browseLibraryPage(store, owner, p, { ...shape, topLevel: true });
+  assert.deepEqual(
+    page.shows.map((show) => show.key).sort(),
+    ["series:7", "folder:Local Show", "folder:Orbiting"].sort(),
+  );
+  assert.deepEqual(
+    page.folders.map((folder) => [folder.sourceId, folder.directory]).sort(),
+    [
+      [custom.id, ""],
+      [custom.id, "Family"],
+      [custom.id, "Lessons"],
+    ].sort(),
+  );
+  assert.equal(
+    page.folders.find(
+      (folder) => folder.sourceId === custom.id && folder.directory === "",
+    )!.available,
+    3,
+  );
+  assert.deepEqual(
+    page.movies.map((movie) => movie.id),
+    [film.id],
+  );
+  assert.deepEqual(
+    page.movieCollections.map((collection) => collection.title),
+    ["Film set"],
+  );
+  assert.deepEqual(
+    page.savedCollections.map((collection) => collection.id),
+    [saved.id],
+  );
+  assert.equal(page.pagination.total, 9);
+  assert.doesNotMatch(JSON.stringify(page), /Private Show|Featurettes/);
+  const selected = selectMedia(store, owner, p, {
+    type: "show",
+    sourceId: tv.id,
+    key: "series:7",
+    includeSpecials: false,
+  });
+  assert.deepEqual(
+    selected.map((item) => item.id).sort(),
+    episodes.map((item) => item.id).sort(),
+  );
+  assert.equal(
+    selectMedia(store, owner, p, {
+      type: "folder",
+      sourceId: custom.id,
+      directory: "Family",
+      recursive: true,
+    }).length,
+    1,
+  );
+  assert.equal(
+    selectMedia(store, owner, p, {
+      type: "folder",
+      sourceId: tv.id,
+      directory: "Orbit/Featurettes",
+      recursive: true,
+    }).length,
+    2,
+  );
+  const search = browseLibraryPage(store, owner, p, {
+    ...shape,
+    topLevel: true,
+    search: "Featurettes",
+  });
+  assert.equal(search.pagination.total, 0);
+  assert.equal(
+    browseLibraryPage(store, owner, p, {
+      ...shape,
+      topLevel: true,
+      kind: "shows",
+    }).pagination.total,
+    3,
+  );
+  assert.equal(
+    browseLibraryPage(store, owner, p, {
+      ...shape,
+      topLevel: true,
+      sourceId: tv.id,
+    }).pagination.total,
+    3,
+  );
+  assert.equal(
+    store.db.prepare("SELECT total_changes() AS n").get()!.n,
+    before,
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(browseLibraryPage(store, owner, p, shape))),
+    JSON.parse(JSON.stringify(raw)),
+  );
+});
+
+test("top-level pages count parent cards rather than hidden descendants and preserve same-named folders across sources", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const owner = account(store),
+    p = profile(store, owner),
+    first = source(store, "/one"),
+    second = source(store, "/two");
+  for (const src of [first, second])
+    store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, src.id);
+  for (let i = 0; i < 30; i++) {
+    const folder = `Show ${String(i).padStart(2, "0")}`;
+    media(store, first.id, `${folder}/Season 1/video.mp4`);
+    media(store, first.id, `${folder}/Featurettes/interview.mp4`);
+  }
+  media(store, second.id, "Show 00/Featurettes/second.mp4");
+  const input = {
+    search: "",
+    kind: "videos",
+    topLevel: true,
+    offset: 0,
+    limit: 24,
+  };
+  const a = browseLibraryPage(store, owner, p, input),
+    b = browseLibraryPage(store, owner, p, { ...input, offset: 24 });
+  assert.equal(a.pagination.total, 31);
+  assert.equal(b.pagination.total, 31);
+  assert.equal(a.folders.length, 24);
+  assert.equal(b.folders.length, 7);
+  const folders = [...a.folders, ...b.folders];
+  assert.equal(
+    new Set(folders.map((folder) => `${folder.sourceId}:${folder.directory}`))
+      .size,
+    31,
+  );
+  assert.equal(
+    folders.filter((folder) => folder.directory === "Show 00").length,
+    2,
+  );
+  assert.ok(folders.every((folder) => !folder.directory.includes("/")));
+  assert.ok(
+    folders
+      .filter((folder) => folder.sourceId === first.id)
+      .every((folder) => folder.available === 2),
+  );
+});
+
+test("admin profile library hides ungranted sources by default scope and annotates inspection without granting access", (t) => {
+  const store = new Store(":memory:");
+  t.after(() => store.close());
+  const admin = account(store, "admin"),
+    editor = account(store),
+    p = profile(store, editor),
+    tv = source(store, "/scoped-tv", "shows"),
+    other = source(store, "/scoped-other", "shows");
+  const granted = media(store, tv.id, "Show/Season 1/one.mp4"),
+    restricted = media(store, tv.id, "Show/Season 2/two.mp4"),
+    outside = media(store, other.id, "Other/Season 1/episode.mp4");
+  for (const item of [granted, restricted])
+    store.db.prepare("UPDATE media SET metadata_json=? WHERE id=?").run(
+      JSON.stringify({
+        seriesId: 7,
+        seriesTitle: "Show",
+        seasonNumber: item.id === granted.id ? 1 : 2,
+      }),
+      item.id,
+    );
+  store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, tv.id);
+  const mixed = saveCollection(store, admin, p, "Mixed seasons", [
+    granted.id,
+    restricted.id,
+  ]);
+  store.db.prepare("DELETE FROM source_grants WHERE profile_id=?").run(p);
+  store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'Show/Season 1')")
+    .run(p, tv.id);
+  const shape = {
+    search: "",
+    titleOnly: true,
+    topLevel: true,
+    kind: "all",
+    offset: 0,
+    limit: 100,
+  };
+  const before = store.db.prepare("SELECT total_changes() AS n").get()!.n;
+  const normal = browseLibraryPage(store, admin, p, {
+    ...shape,
+    access: "profile",
+  });
+  assert.equal(normal.shows.length, 1);
+  assert.equal(normal.shows[0]!.profileAllowed, true);
+  assert.deepEqual(
+    normal.shows[0]!.seasons.map((season) => season.number),
+    [1],
+  );
+  assert.equal(normal.sources.length, 1);
+  assert.equal(normal.savedCollections.length, 0);
+  const all = browseLibraryPage(store, admin, p, { ...shape, access: "all" });
+  assert.equal(all.shows.length, 2);
+  assert.equal(all.sources.length, 2);
+  assert.ok(all.shows.every((show) => show.profileAllowed === false));
+  assert.equal(
+    all.savedCollections.find((collection) => collection.id === mixed.id)!
+      .profileAllowed,
+    false,
+  );
+  assert.equal(
+    store.db.prepare("SELECT total_changes() AS n").get()!.n,
+    before,
+  );
+  assert.throws(
+    () => browseLibraryPage(store, editor, p, { ...shape, access: "all" }),
+    /Administrator access/,
+  );
+  const noGrants = profile(store, admin);
+  assert.equal(
+    browseLibraryPage(store, admin, noGrants, { ...shape, access: "profile" })
+      .pagination.total,
+    0,
+  );
+});

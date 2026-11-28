@@ -673,7 +673,7 @@ function ProfileEditor(
           initial={draft.grants
             .filter((item) => item.sourceId === source)
             .map((item) => item.subtree)}
-          load={catalogDirectoryLoader(props.id, source)}
+          load={catalogDirectoryLoader(props.id, source, "all")}
           onApply={(paths) => {
             change({
               grants: [

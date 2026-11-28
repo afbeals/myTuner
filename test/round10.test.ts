@@ -250,6 +250,7 @@ test("R10-08 preview/publication accept 150,000 resolved clips in a small dynami
     p = profile(store, owner),
     src = source(store, "/synthetic/videos", "videos"),
     ch = channel(store, owner);
+  store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, src.id);
   store.transaction(() => {
     for (let n = 0; n < 1500; n++)
       media(store, src.id, `folder/${n}.mp4`, 60000);

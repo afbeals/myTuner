@@ -174,6 +174,8 @@ export function CatalogBrowser({
   allowFileSelection = true,
   selectionMode = "multiple",
   showInspectionNotice = true,
+  access = "profile",
+  inspectionOnly = false,
 }: {
   profileId: string;
   sources: Source[];
@@ -186,6 +188,8 @@ export function CatalogBrowser({
   allowFileSelection?: boolean;
   selectionMode?: "multiple" | "single";
   showInspectionNotice?: boolean;
+  access?: "profile" | "all";
+  inspectionOnly?: boolean;
 }) {
   const [search, setSearch] = useState(""),
     [source, setSource] = useState(""),
@@ -210,6 +214,7 @@ export function CatalogBrowser({
       offset: String(offset),
       limit: "50",
       includeCommercials: String(includeCommercials),
+      access,
     }),
     result = useCatalogPage<Page>(
       `/api/profiles/${profileId}/catalog/tree?${params}`,
@@ -221,6 +226,12 @@ export function CatalogBrowser({
   };
   return (
     <section aria-label="Folder and filename search">
+      {inspectionOnly && (
+        <p className="notice" role="status">
+          Admin inspection of all sources. Turn off Show all sources to select
+          content allowed for this profile.
+        </p>
+      )}
       <form
         className="catalog-search"
         onSubmit={(event) => {
@@ -371,6 +382,7 @@ export function CatalogBrowser({
                   </button>
                   <button
                     type="button"
+                    disabled={inspectionOnly}
                     aria-label={`Choose folder ${sources.find((source) => source.id === node.sourceId)?.name ?? "Source"} · ${node.path}`}
                     onClick={() => onFolder(node, true)}
                   >
@@ -381,8 +393,9 @@ export function CatalogBrowser({
                 <button
                   type="button"
                   disabled={
-                    selectionMode === "multiple" &&
-                    selectedIds.includes(node.id)
+                    inspectionOnly ||
+                    (selectionMode === "multiple" &&
+                      selectedIds.includes(node.id))
                   }
                   aria-pressed={
                     selectionMode === "single"
@@ -454,6 +467,7 @@ export function CatalogBrowser({
           <button
             type="button"
             className="secondary"
+            disabled={inspectionOnly}
             onClick={() =>
               onFolder(
                 {
@@ -480,7 +494,7 @@ export function CatalogBrowser({
             sources.find((item) => item.id === source)?.name ?? "Source"
           }
           initial={[parent]}
-          load={catalogDirectoryLoader(profileId, source)}
+          load={catalogDirectoryLoader(profileId, source, access)}
           onClose={() => setTree(false)}
           onApply={(paths) => {
             setParent(paths[0] ?? "");

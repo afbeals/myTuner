@@ -4,7 +4,7 @@
 
 The server uses Node 24's built-in `DatabaseSync` against `mytuner.db` in `MYTUNER_DATA_DIR`. The database contains references, metadata and application state. It contains no original videos or encoded video blobs. Generated assets and caches are files outside media sources.
 
-`src/database.ts` is the authoritative schema. There are currently **twenty-one append-only migrations**, tracked by SQLite `PRAGMA user_version`. This document describes their resulting schema. SQL names use snake_case; public HTTP JSON normally converts these to camelCase.
+`src/database.ts` is the authoritative schema. There are currently **twenty-two append-only migrations**, tracked by SQLite `PRAGMA user_version`. This document describes their resulting schema. SQL names use snake_case; public HTTP JSON normally converts these to camelCase.
 
 Most entity IDs are UUID text. Authentication session identifiers are hashes, pairing identifiers are hashes, and provider IDs are source-scoped external text. Booleans are stored as integer 0/1. Time values are epoch milliseconds unless explicitly identified as a duration or relative source offset. `mtime_ms` retains the filesystem's numeric modification timestamp.
 
@@ -126,7 +126,7 @@ The database file is restricted to mode 0600 where supported. Data remains on lo
 
 Application snapshots include a consistent database, `integration.key` when present and a manifest. Original media, generated outputs and disposable caches are not included. Database-only pre-migration snapshots need the matching integration key to recover encrypted credentials. Use [operational runbooks](OPERATIONS.md), not a live `cp` of the DB file.
 
-Maintenance expires authentication/unlock/pairing/throttle state and playback sessions idle for 24 hours. It collects superseded revisions older than seven days only if neither active nor referenced by playback. Active timeline history and delivered telemetry currently remain retained; their long-term growth/archival policy is still an acceptance item. Backups also need an operator-selected retention policy.
+Maintenance expires authentication/unlock/pairing/throttle state and playback sessions idle for 24 hours. It collects superseded revisions older than seven days only if neither active nor referenced by playback. Active timeline history and delivered telemetry remain retained unless the owner/admin explicitly confirms permanent deletion of their archived channel; their long-term growth/archival policy is still an acceptance item. Backups also need an operator-selected retention policy.
 
 Restore revokes login, pairing, unlock and playback sessions and queues interrupted generation work. Source paths and generated-asset references remain logical references; restore does not recreate mounts or files. Rescan mounted sources and explicitly regenerate missing derivatives. Retention is not permission: historical queries continue to filter data using current access.
 
@@ -235,3 +235,17 @@ The browser's preview counts/database summary revision are advisory. The offline
 Restore stages the stricter union of live/snapshot safety policies and known roots without changing backup bytes. Interrupted restore journals carry that protection forward through installation, rollback and recovery. An earlier backup cannot silently re-enable cleanup. Unknown historical roots in a damaged live database cannot be reconstructed by assumption; conservative output-write blocking remains until explicit safety-state recovery. The reset feature has no general force/re-enable switch.
 
 See [the offline reset runbook](OPERATIONS.md#reset-application-data-offline) and [independent safety review](RESET_SAFETY_REVIEW.md). Schema 21 requires the corresponding image; keep a matching pre-migration DB/key bundle for an older-image rollback.
+
+### Archived channel deletion and empty programming (0.3.1)
+
+No schema migration is required. Older 0.3.0 programming parsers require at least one group; a rollback after saving empty programming requires a compatible pre-upgrade backup. A saved `schedule_revisions.config_json` may contain `groups: []`, with an empty future schedule and fresh rotation state. The active revision remains the identity used for concurrency and later edits. Any prefix through the current airing boundary and earlier paused revisions remain authoritative. Maintenance must not extend empty programming.
+
+`channel-lifecycle.ts` performs confirmed archived deletion in one transaction, removing `playback_events`, `problem_reports`, `playback_sessions`, `subscriptions`, `active_schedules`, `schedule_entries`, `schedule_revisions` (cascading `schedule_checkpoints`), `channel_items`, `rotation_state`, then the channel. The impact revision detects details/count/saved-programming changes. Any constraint failure rolls the whole deletion back. Shared catalog/media/collection/asset rows and all physical files are preserved. Restoring a backup remains an explicit separate operator operation.
+
+## Delayed-playback handover — schema 22
+
+Migration 22 adds three columns to `playback_sessions`: nullable `pending_revision_id` (foreign key to `schedule_revisions`), nullable `pending_at_ms` (the complete-airing end), and `state_version` (integer, initially zero). A CHECK requires the pending revision and timestamp to be both present or both absent. Existing clocks, revisions and pause states are preserved. Channel and pending-revision indexes support publication staging and revision retention.
+
+Publication stages compatible channel sessions in the same transaction as the shared schedule. Semantically identical complete airings are compared once per source/target/program within that publication and reused across viewers. Applying a pending handover changes only revision/delivery identity and increments the version; it does not change position, anchor or pause. Controls and staging also increment the version; ordinary descriptor polling does not create per-second durable writes. Expiration, archive, reset and restore remove session state under their existing rules. Cleanup retains revisions referenced by either the current or pending pointer. No new media, per-viewer schedule table, source mutation or provider call is required.
+
+The existing pre-migration backup runs before upgrading an actual schema-21 file. An older schema-21 image cannot open schema 22; rollback requires its matching pre-migration database/key backup. Keep the backup and use the documented stopped-server restore procedure.

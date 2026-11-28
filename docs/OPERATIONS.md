@@ -243,7 +243,7 @@ Node may print its SQLite experimental warning on stderr. For machine parsing of
 
 Setup & server health distinguishes Not yet checked, In progress or interrupted, Failed, Overdue and Last check succeeded. A source can be readable even when its Sonarr/Radarr refresh failed. “Not scheduled · manual checks only” describes scheduling, not health. Review the last check, last successful check and sanitized error; the previous successful catalog remains available after a failed provider request. Retry Scan & refresh metadata in Sources, then refresh the overview after its short cache expires. Disabling automatic refresh preserves these diagnostics; a restart cannot turn a recorded failed attempt into success.
 
-The current schema is 21; use a matching backup/image for rollback. Physical Windows Docker/Unraid/device follow-ups are collected in [differed](differed.md).
+The current schema is 22; use a matching backup/image for rollback. Physical Windows Docker/Unraid/device follow-ups are collected in [differed](differed.md).
 
 ## Container stop, exit 137 and Unraid statistics
 
@@ -261,7 +261,7 @@ docker inspect MyTuner --format 'Exit={{.State.ExitCode}} OOMKilled={{.State.OOM
 docker stats --no-stream MyTuner
 ```
 
-Keep the owner’s preferred Extra Parameters blank and Unraid Autostart off. A single-container Start/Stop is distinct from starting/stopping Unraid’s Docker service. Recreating the container must preserve the existing appdata mounts. Before an upgrade to schema 21, create a consistent application backup while the existing server runs.
+Keep the owner’s preferred Extra Parameters blank and Unraid Autostart off. A single-container Start/Stop is distinct from starting/stopping Unraid’s Docker service. Recreating the container must preserve the existing appdata mounts. Before an upgrade to schema 22, create a consistent application backup while the existing server runs.
 
 ## HDD efficiency investigation and proposed next work
 

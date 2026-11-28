@@ -1,3 +1,8 @@
+import {
+  settlePlaybackUpdate,
+  stagePlaybackUpdate,
+  type PlaybackClock,
+} from "./playback-updates.js";
 import { createMediaProjector } from "./display-metadata.js";
 import { clearProfileUnlocks } from "./identity.js";
 import type { ProgrammingService } from "./programming.js";
@@ -10,9 +15,10 @@ import {
   requireChannelMedia,
   requireProfile,
   createMediaAuthorizer,
+  canReadMedia,
 } from "./security.js";
 import { resolveLive } from "./scheduler.js";
-interface Session {
+interface Session extends PlaybackClock {
   id: string;
   account_id: string;
   profile_id: string;
@@ -117,6 +123,7 @@ export class PlaybackService {
         revisionId: row.revision_id,
         positionMs:
           row.position_ms + (row.paused ? 0 : Math.max(0, now - row.anchor_ms)),
+        untilMs: row.pending_at_ms ?? undefined,
       });
     return row;
   }
@@ -125,32 +132,22 @@ export class PlaybackService {
       position =
         row.position_ms + (row.paused ? 0 : Math.max(0, now - row.anchor_ms));
     const active = this.programming?.active(row.channel_id);
-    if (
-      !row.paused &&
-      row.position_ms === row.anchor_ms &&
-      active &&
-      active.effective_ms <= position &&
-      active.id !== row.revision_id
-    ) {
-      requireChannelMedia(
-        this.store,
-        account,
-        row.profile_id,
-        visibleChannel(this.store, account, row.channel_id),
-        { revisionId: active.id, positionMs: position },
-      );
-      row.revision_id = active.id;
-      this.store.db
-        .prepare("UPDATE playback_sessions SET revision_id=? WHERE id=?")
-        .run(active.id, id);
+    settlePlaybackUpdate(this.store, row, now);
+    if (active && active.id !== row.revision_id) {
+      stagePlaybackUpdate(this.store, row, active.id, now);
     }
-    this.programming?.ensure(row.channel_id, position + 60000, row.revision_id);
+    const horizon = Math.min(position + 60000, row.pending_at_ms ?? Infinity);
+    this.programming?.ensure(row.channel_id, horizon, row.revision_id);
     requireChannelMedia(
       this.store,
       account,
       row.profile_id,
       visibleChannel(this.store, account, row.channel_id),
-      { revisionId: row.revision_id, positionMs: position },
+      {
+        revisionId: row.revision_id,
+        positionMs: position,
+        untilMs: row.pending_at_ms ?? undefined,
+      },
     );
     const live = resolveLive(
       this.store,
@@ -183,14 +180,13 @@ export class PlaybackService {
         .prepare(
           "SELECT MIN(start_ms) AS startMs,MAX(end_ms) AS endMs,SUM(CASE WHEN kind='program' THEN end_ms-start_ms ELSE 0 END) AS contentDurationMs,SUM(CASE WHEN kind='program' THEN MAX(0,MIN(end_ms,?)-start_ms) ELSE 0 END) AS contentElapsedMs FROM schedule_entries WHERE revision_id=? AND program_id=?",
         )
-        .get(position, row.revision_id, live.entry.programId)!;
-      const nextRevision =
-        !row.paused &&
-        row.position_ms === row.anchor_ms &&
-        active &&
-        active.effective_ms <= Number(airing.endMs)
-          ? active.id
-          : row.revision_id;
+        .get(position, row.revision_id, live.entry.programId) as {
+        startMs: number;
+        endMs: number;
+        contentDurationMs: number;
+        contentElapsedMs: number;
+      };
+      const nextRevision = row.pending_revision_id ?? row.revision_id;
       const next = this.store.db
         .prepare(
           "SELECT e.start_ms AS startMs,e.end_ms AS endMs,m.* FROM schedule_entries e JOIN media m ON m.id=e.media_id WHERE e.revision_id=? AND e.start_ms>=? AND e.kind='program' AND e.program_id<>? ORDER BY e.start_ms LIMIT 1",
@@ -252,30 +248,40 @@ export class PlaybackService {
       profileId: row.profile_id,
       channelId: row.channel_id,
       revisionId: row.revision_id,
+      stateVersion: row.state_version,
       paused: Boolean(row.paused),
       positionMs: position,
       behindLiveMs: Math.max(0, now - position),
+      scheduleUpdate: row.pending_revision_id
+        ? { atMs: row.pending_at_ms, rejoinRequired: false }
+        : active && active.id !== row.revision_id
+          ? { atMs: null, rejoinRequired: true }
+          : null,
       available,
       playback: live,
       context,
     };
   }
   pause(account: Account, id: string, now = Date.now()) {
+    this.describe(account, id, now);
     const row = this.session(account, id, now),
       position =
         row.position_ms + (row.paused ? 0 : Math.max(0, now - row.anchor_ms));
     this.store.db
       .prepare(
-        "UPDATE playback_sessions SET position_ms=?,anchor_ms=?,paused=1 WHERE id=?",
+        "UPDATE playback_sessions SET position_ms=?,anchor_ms=?,paused=1,state_version=state_version+1 WHERE id=?",
       )
       .run(position, now, id);
     return this.describe(account, id, now);
   }
   resume(account: Account, id: string, now = Date.now()) {
+    this.describe(account, id, now);
     const row = this.session(account, id, now);
     if (row.paused)
       this.store.db
-        .prepare("UPDATE playback_sessions SET anchor_ms=?,paused=0 WHERE id=?")
+        .prepare(
+          "UPDATE playback_sessions SET anchor_ms=?,paused=0,state_version=state_version+1 WHERE id=?",
+        )
         .run(now, id);
     return this.describe(account, id, now);
   }
@@ -300,7 +306,7 @@ export class PlaybackService {
     );
     this.store.db
       .prepare(
-        "UPDATE playback_sessions SET revision_id=?,position_ms=?,anchor_ms=?,paused=0 WHERE id=?",
+        "UPDATE playback_sessions SET revision_id=?,position_ms=?,anchor_ms=?,paused=0,pending_revision_id=NULL,pending_at_ms=NULL,state_version=state_version+1 WHERE id=?",
       )
       .run(revision.revision_id, now, now, id);
     return this.describe(account, id, now);
@@ -311,13 +317,25 @@ export class PlaybackService {
     event: { id: string; entryId: string; startMs: number; endMs: number },
     now = Date.now(),
   ) {
-    const session = this.session(account, id, now),
-      description = this.describe(account, id, now);
+    const description = this.describe(account, id, now),
+      session = this.session(account, id, now);
     const entry = this.store.db
       .prepare(
-        "SELECT start_ms,end_ms,media_id,kind,program_id FROM schedule_entries WHERE id=? AND revision_id=?",
+        `SELECT e.start_ms,e.end_ms,e.media_id,e.kind,e.program_id FROM schedule_entries e
+        WHERE e.id=? AND e.channel_id=? AND (e.revision_id=? OR (
+          e.end_ms<=? AND e.end_ms>=? AND EXISTS(SELECT 1 FROM schedule_entries c
+            WHERE c.revision_id=? AND c.program_id=e.program_id AND c.media_id=e.media_id
+            AND c.start_ms=e.start_ms AND c.end_ms=e.end_ms AND c.offset_ms=e.offset_ms
+            AND c.kind=e.kind AND c.source_size=e.source_size AND c.source_mtime_ms=e.source_mtime_ms)))`,
       )
-      .get(event.entryId, session.revision_id) as
+      .get(
+        event.entryId,
+        session.channel_id,
+        session.revision_id,
+        description.positionMs,
+        description.positionMs - 60000,
+        session.revision_id,
+      ) as
       | {
           start_ms: number;
           end_ms: number;
@@ -326,8 +344,16 @@ export class PlaybackService {
           program_id: string;
         }
       | undefined;
+    const item = entry
+      ? (this.store.db
+          .prepare("SELECT * FROM media WHERE id=?")
+          .get(entry.media_id) as unknown as
+          import("./domain.js").Media | undefined)
+      : undefined;
     invariant(
       entry &&
+        item &&
+        canReadMedia(this.store, account, session.profile_id, item) &&
         event.startMs >= entry.start_ms &&
         event.endMs <= entry.end_ms &&
         event.endMs > event.startMs &&
@@ -431,7 +457,7 @@ export class PlaybackService {
       .run(now - ttlMs, now);
     const unused = this.store.db
       .prepare(
-        "SELECT id FROM schedule_revisions WHERE created_at<? AND NOT EXISTS(SELECT 1 FROM active_schedules a WHERE a.revision_id=schedule_revisions.id) AND NOT EXISTS(SELECT 1 FROM playback_sessions p WHERE p.revision_id=schedule_revisions.id)",
+        "SELECT id FROM schedule_revisions WHERE created_at<? AND NOT EXISTS(SELECT 1 FROM active_schedules a WHERE a.revision_id=schedule_revisions.id) AND NOT EXISTS(SELECT 1 FROM playback_sessions p WHERE p.revision_id=schedule_revisions.id OR p.pending_revision_id=schedule_revisions.id)",
       )
       .all(now - 7 * 86400000);
     this.store.transaction(() => {

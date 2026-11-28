@@ -1950,8 +1950,54 @@ button {
   z-index: 4;
 }
 .video-stage .paused-status {
+  position: absolute;
+  top: auto;
+  bottom: 4%;
+  left: 4%;
+  right: auto;
+  max-width: 92%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: clamp(8px, 2vw, 16px);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  z-index: 5;
+}
+.video-stage .paused-status strong {
+  font-size: clamp(16px, 2.4vw, 26px);
+}
+.video-stage .paused-status small {
+  color: #b4ccd5;
+}
+/* Reserve separate rows so large captions and pause details never overlap. */
+.video-stage .picture-surface.paused-with-captions {
+  display: grid;
+  grid-template-rows: max-content minmax(16px, 1fr) max-content;
+  aspect-ratio: auto;
+  padding: 4%;
+}
+.video-stage .paused-with-captions::before {
+  content: "";
+  grid-area: 1 / 1 / 4 / 2;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  pointer-events: none;
+}
+.watching .video-stage .paused-with-captions video {
+  position: absolute;
+  inset: 0;
+}
+.video-stage .paused-with-captions .paused-status {
   position: static;
-  flex-shrink: 0;
+  grid-area: 1 / 1;
+  justify-self: start;
+  max-width: 100%;
+}
+.video-stage .paused-with-captions .subtitle-cue {
+  position: static;
+  grid-area: 3 / 1;
 }
 .video-stage .player-reveal {
   position: static;
@@ -1966,6 +2012,9 @@ button {
   flex: 1;
   min-height: 0;
   aspect-ratio: auto;
+}
+.video-stage:fullscreen .paused-with-captions::before {
+  display: none;
 }
 .video-stage:fullscreen .player-overlay {
   max-height: 45dvh;

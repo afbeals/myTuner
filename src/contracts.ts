@@ -82,7 +82,6 @@ export const programmingSchema = z
           })
           .strict(),
       )
-      .min(1)
       .max(100),
     checkpointActions: z
       .array(

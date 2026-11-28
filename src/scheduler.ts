@@ -153,7 +153,7 @@ export function buildSchedule(input: {
     "Invalid schedule window",
   );
   invariant(
-    groups.length > 0 && groups.some((g) => g.clips.length > 0),
+    groups.length === 0 || groups.some((g) => g.clips.length > 0),
     400,
     "Programming needs available media",
   );
@@ -277,6 +277,7 @@ export function buildSchedule(input: {
     cursor += durationMs;
   };
   const diagnostics: BreakDiagnostic[] = [];
+  if (!groups.length) return { entries, state, checkpoints, diagnostics };
   const commercialBreak = (programId: string) => {
     const detail: BreakDiagnostic = {
       startMs: cursor,

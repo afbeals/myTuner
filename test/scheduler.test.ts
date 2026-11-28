@@ -242,8 +242,12 @@ test("random break positions remain internal and total source duration is preser
     ),
   );
 });
-test("invalid empty programming and limits fail explicitly", () => {
-  assert.throws(() => build([]), /available media/);
+test("zero groups make an empty schedule while unavailable groups and invalid limits fail explicitly", () => {
+  const empty = build([], 10_000, rules(), [{ id: "ad", durationMs: 1000 }]);
+  assert.deepEqual(empty.entries, []);
+  assert.deepEqual(empty.checkpoints, []);
+  assert.deepEqual(empty.diagnostics, []);
+  assert.throws(() => build([group([])]), /available media/);
   assert.throws(() => build([group([{ id: "s", durationMs: 0 }])]), /duration/);
   assert.throws(
     () =>

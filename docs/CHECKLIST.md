@@ -499,3 +499,52 @@ Owner approved all eight scenarios, with two independent passes each for1,2and4 
 - [x] Repeat affected/full regression, browser/visual/CI-equivalent checks and finish operator/API/database documentation.
 
 See [reset design](RESET_DATA_PROPOSAL.md), [safety review and evidence](RESET_SAFETY_REVIEW.md), and [walkthrough fix coverage](UI_UX_FIX_COVERAGE.md).
+
+## Empty channels and complete archived removal — 0.3.1
+
+- [x] Accept zero groups in creation/editing/preview/save without generating filler or recurring catch-up work; keep the current-airing boundary and old paused revisions.
+- [x] Allow confirmed owner/admin deletion of archived channels together with their groups, programming, schedules/checkpoints, rotation, sessions/history, reports and subscriptions.
+- [x] Keep source media/sidecars, catalog records, collections, derivatives, unknown files, backups and unrelated channels unchanged; reject stale/unauthorized requests and roll back partial database failures.
+- [x] Run API/backend/browser/visual comparisons and CI-equivalent checks; record successful channel coverage and the measured local Mac audio/display limitations in VERIFICATION.md.
+- [ ] Require a clean hosted CI run before merging the 0.3.1 follow-up; keep physical-device and Unraid acceptance separate from hosted checks.
+
+## Parent cards on the main library page — 0.3.1
+
+- [x] Use a main-page-only catalog view that hides nested/duplicate folder cards while keeping recognized shows, movies, named collections and top-level custom folders.
+- [x] Apply grouping before pagination/counts, retain source/permission boundaries, and use the current indexed catalog without filesystem traversal or source configuration changes.
+- [x] Keep the existing detail modal, seasons, exact selections, directory tree and programming selectors unchanged.
+- [x] Finish browser/visual comparisons and record exact results in VERIFICATION.md: 693 backend and 32 affected browser/visual/accessibility checks pass.
+
+## Profile-scoped library and admin inspection — 0.3.1
+
+- [x] Apply selected-profile source/subtree grants to default library/options/tree reads, including administrator requests, before counts and pagination.
+- [x] Add explicit administrator-only Show all sources inspection, restricted-card/per-video indicators, disabled restricted selection and a read-only inspection folder/file browser.
+- [x] Keep grants unchanged, enforce target-profile grants in admin-authored programming/collection writes, segregate caches/workers and clear stale details/toggle state on profile switch.
+- [x] Verify backend, worker and API privacy/safety with synthetic no-grant, subtree/mixed-group, access-revocation and forged-mode cases; verify real browser profile switching/inspection and desktop/narrow restricted-card visuals.
+- [x] Finish affected integrated browser/visual/format/build comparisons; 32 browser cases and production/compiled smoke checks pass. Exact results and remaining external limits are in VERIFICATION.md.
+
+## Commercial picker and live guide — research only
+
+- [x] Complete the owner-requested independent [commercial-selection research](COMMERCIAL_SELECTION_PLAN.md) and [content-only guide research](CONTENT_ONLY_LIVE_GUIDE_PLAN.md); preserve existing detailed commercial previews.
+- [ ] Review/select the proposed commercial picker contract/interaction, then authorize implementation and its synthetic performance/privacy/UI tests.
+- [ ] Review/select the content-only live-guide contract/presentation, then authorize backend/browser/native implementation and appropriate tests. Actual commercials and detailed create/edit previews remain unchanged.
+
+## Automatic programming updates for delayed viewers — 0.3.1 / schema 22
+
+- [x] Complete the requested research; document canonical broadcast timing versus retroactive personal programming.
+- [x] Persist/stage compatible full-airing handovers transactionally during publication, including paused sessions; preserve position/delay and repeated-edit boundaries.
+- [x] Bound HLS prefetch/delivery, retain pending revisions, enforce old/target grants, and align report/admission references.
+- [x] Add durable descriptor ordering, browser/TV negotiation identity checks and explicit recovery for already-diverged legacy sessions.
+- [x] Add synthetic pause/break/repeated-edit/late-poll/empty/restart/grant/retention/event/migration/stale-response regression coverage.
+- [x] Complete scoped backend/browser/visual/production/type/format/native checks; 708 backend tests pass, all seven affected browser scenarios passed across normal scoped runs, and final exact evidence/limits are in VERIFICATION.md.
+- [ ] Validate actual HLS airing-boundary latency and updated TV behavior on the target devices/Unraid host; existing emulator deferral remains.
+
+## Paused picture with the menu hidden — 0.3.1
+
+- [x] Put the browser pause message over the actual retained picture in desktop, narrow and fullscreen layouts; keep it independent of the menu and include program/progress/resume context.
+- [x] Support browser media-key/session pause and resume while controls are hidden without intercepting text fields or dialogs.
+- [x] Add a bounded in-memory TV frame copy before releasing paused delivery, with stale-callback/first-frame/timeout handling and an independent message-only fallback.
+- [x] Verify real browser direct/HLS frozen pixels, no continued media fetch, hidden-menu/normal/lost-response pause and resume/Go Live; compare three new visual baselines and related controls/caption/revision regressions.
+- [x] Keep large real captions separate from pause details, including desktop/narrow/fullscreen, without changing caption size or hiding their text.
+- [x] Run existing offline native build/lint plus 35 JVM tests, server/browser type checks, production browser build, formatting and whitespace checks; update the APK checksum and detailed verification evidence.
+- [ ] Confirm PixelCopy/frame display on the owner’s actual Bravia/Fire OS device, including remote Pause with controls hidden, fullscreen/aspect ratio and low-memory/capture fallback. Emulator work remains deferred.

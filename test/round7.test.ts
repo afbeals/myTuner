@@ -751,9 +751,9 @@ test("R7 API collection delete/restart/restore retains metadata, filters selecto
     stranger = account(store),
     p = profile(store, owner),
     src = source(store, join(root, "media")),
-    m = media(store, src.id),
-    c = saveCollection(store, admin, p, "Recover original ID", [m.id]);
+    m = media(store, src.id);
   store.db.prepare("INSERT INTO source_grants VALUES(?,?,'')").run(p, src.id);
+  const c = saveCollection(store, admin, p, "Recover original ID", [m.id]);
   const token = randomUUID();
   store.db
     .prepare(

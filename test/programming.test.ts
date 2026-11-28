@@ -965,3 +965,157 @@ test("renamed-folder preview identifies the empty group and recovery while a hea
     "synthetic original bytes",
   );
 });
+
+test("zero-group programming previews without writes, saves empty, stays idle and can be populated later", async (t) => {
+  const f = setup(t),
+    empty = { ...f.config, groups: [] };
+  assert.deepEqual(
+    f.service.preview(f.owner, f.ch.id, empty, 1000).entries,
+    [],
+  );
+  assert.equal(f.service.active(f.ch.id), undefined);
+  const saved = f.service.publish(f.owner, f.ch.id, empty, 1000);
+  assert.deepEqual(saved.entries, []);
+  assert.equal(saved.effectiveMs, 1000);
+  assert.deepEqual(
+    JSON.parse(f.service.active(f.ch.id)!.config_json!).groups,
+    [],
+  );
+  const before = f.store.db.prepare("SELECT * FROM schedule_revisions").all();
+  f.service.ensure(f.ch.id, 1_000_000_000);
+  await f.service.ensureBackground(f.ch.id, 1_000_000_000);
+  assert.deepEqual(
+    f.store.db.prepare("SELECT * FROM schedule_revisions").all(),
+    before,
+  );
+  assert.equal(resolveLive(f.store, f.ch.id, 1001), null);
+  const playback = new PlaybackService(f.store, f.service);
+  assert.throws(
+    () => playback.join(f.owner, f.p, f.ch.id, 1001),
+    /No scheduled programming/,
+  );
+  const next = f.service.publish(
+    f.owner,
+    f.ch.id,
+    { ...f.config, expectedRevisionId: saved.revisionId },
+    5000,
+  );
+  assert.equal(next.effectiveMs, 5000);
+  assert.equal(next.entries[0]!.mediaId, f.one.id);
+  assert.equal(resolveLive(f.store, f.ch.id, 5000)!.entry.mediaId, f.one.id);
+});
+
+test("clearing all groups finishes the current airing and breaks, preserves paused playback, and re-adds at the pending boundary", (t) => {
+  const f = setup(t),
+    adSource = source(f.store, "/ads", "commercials"),
+    ad = media(f.store, adSource.id, "ad.mp4", 800);
+  f.store.db
+    .prepare("INSERT INTO source_grants VALUES(?,?,'')")
+    .run(f.p, adSource.id);
+  const config: Programming = {
+    ...f.config,
+    commercialSelection: { type: "media", ids: [ad.id] },
+    rules: { ...noBreaks, between: true, maxClips: 1, maxDurationMs: 800 },
+  };
+  const initial = f.service.publish(f.owner, f.ch.id, config, 1000, 5000);
+  const playback = new PlaybackService(f.store, f.service);
+  const session = playback.join(f.owner, f.p, f.ch.id, 1100);
+  playback.pause(f.owner, session.id, 1100);
+  const before = f.store.db
+    .prepare(
+      "SELECT * FROM schedule_entries WHERE revision_id=? ORDER BY start_ms",
+    )
+    .all(initial.revisionId);
+  const cleared = f.service.publish(
+    f.owner,
+    f.ch.id,
+    { ...config, groups: [], expectedRevisionId: initial.revisionId },
+    1200,
+  );
+  assert.equal(cleared.effectiveMs, 2800);
+  assert.deepEqual(cleared.entries, []);
+  assert.equal(resolveLive(f.store, f.ch.id, 2100)!.entry.kind, "commercial");
+  assert.equal(resolveLive(f.store, f.ch.id, 2800), null);
+  f.service.ensure(f.ch.id, 10_000_000);
+  assert.equal(resolveLive(f.store, f.ch.id, 5000), null);
+  assert.deepEqual(
+    f.store.db
+      .prepare(
+        "SELECT * FROM schedule_entries WHERE revision_id=? ORDER BY start_ms",
+      )
+      .all(initial.revisionId),
+    before,
+  );
+  assert.equal(playback.describe(f.owner, session.id, 5000).paused, true);
+  const repeated = f.service.publish(
+    f.owner,
+    f.ch.id,
+    { ...config, groups: [], expectedRevisionId: cleared.revisionId },
+    1300,
+  );
+  assert.equal(repeated.effectiveMs, 2800);
+  const restored = f.service.publish(
+    f.owner,
+    f.ch.id,
+    { ...config, expectedRevisionId: repeated.revisionId },
+    1400,
+  );
+  assert.equal(restored.effectiveMs, 2800);
+  assert.equal(restored.entries[0]!.mediaId, f.one.id);
+  assert.throws(
+    () =>
+      f.service.publish(
+        f.owner,
+        f.ch.id,
+        { ...config, groups: [], expectedRevisionId: initial.revisionId },
+        1500,
+      ),
+    /changed elsewhere/,
+  );
+});
+
+test("empty programming does not resolve stale commercial references or expired unavailable groups and retains authorization", (t) => {
+  const f = setup(t);
+  f.service.publish(f.owner, f.ch.id, f.config, 1000, 3000);
+  f.store.db.prepare("UPDATE media SET available=0").run();
+  const empty: Programming = {
+    ...f.config,
+    groups: [],
+    commercialSelection: {
+      type: "folder",
+      sourceId: crypto.randomUUID(),
+      directory: "gone",
+      recursive: true,
+    },
+    disabledCommercialIds: [crypto.randomUUID()],
+  };
+  const saved = f.service.publish(f.owner, f.ch.id, empty, 5000);
+  assert.equal(saved.effectiveMs, 5000);
+  assert.deepEqual(saved.entries, []);
+  assert.throws(
+    () => f.service.publish(f.owner, f.ch.id, f.config, 6000),
+    /No available programming/,
+  );
+  assert.throws(
+    () => f.service.publish(account(f.store), f.ch.id, empty, 6000),
+    /Channel not found/,
+  );
+  assert.throws(
+    () =>
+      f.service.publish(
+        f.owner,
+        f.ch.id,
+        {
+          ...empty,
+          checkpointActions: [{ groupId: "show", action: "restart" }],
+        },
+        6000,
+      ),
+    /Checkpoint controls require/,
+  );
+  f.store.db.prepare("DELETE FROM source_grants WHERE profile_id=?").run(f.p);
+  assert.deepEqual(
+    f.service.publish(f.owner, f.ch.id, empty, 7000).entries,
+    [],
+  );
+});

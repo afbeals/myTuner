@@ -4,7 +4,7 @@
 
 Work in this standalone checkout on a feature branch; the current UI overhaul branch is `feature/ui-ux-overhaul`. The earlier `feature/standalone-foundation` branch name describes historical foundation work, not a required branch to switch to. Its `AGENTS.md` excludes Pineapple/Airbnb conventions. Follow this project's npm/Node tooling. The earlier Python sidecar/proxy directories and legacy deployment files are preserved historical work; do not run their media-writing tools on the read-only standalone sources.
 
-All current work remains local unless explicitly committed/published. Never add actual media, credentials, live database/key material, generated outputs or temporary test artifacts to Git. The owner approved Figma designs; the current browser/native projects are version 0.3.0, database schema 20. Earlier dated test/evidence sections retain their original build scope.
+All current work remains local unless explicitly committed/published. Never add actual media, credentials, live database/key material, generated outputs or temporary test artifacts to Git. The owner approved Figma designs; the current browser/native projects are version 0.3.1, database schema 22. Earlier dated test/evidence sections retain their original build scope.
 
 ## Setup and scripts
 

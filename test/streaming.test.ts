@@ -566,3 +566,53 @@ test("subtitle stop aborts and drains an already active extraction", async (t) =
   await rejected;
   assert.deepEqual(await readdir(cache), []);
 });
+
+test("an in-flight old HLS conversion cannot deliver after a programming handover", async (t) => {
+  const f = await fixture(t);
+  const { ProgrammingService } = await import("../src/programming.js");
+  const programming = new ProgrammingService(f.store);
+  let target = "",
+    executions = 0;
+  const streaming = new StreamingService(
+    f.store,
+    f.playback,
+    join(f.root, "handover-cache"),
+    512 * 1024 * 1024,
+    async (args, signal, output) => {
+      executions++;
+      const changed = programming.publish(
+        f.owner,
+        f.ch.id,
+        {
+          profileId: f.p,
+          groups: [
+            {
+              id: "new",
+              mode: "ordered",
+              selection: { type: "media", ids: [f.item.id] },
+            },
+          ],
+          rules: noBreaks,
+          seed: 1,
+        },
+        Date.now(),
+        60000,
+      );
+      target = changed.revisionId;
+      f.store.db
+        .prepare(
+          "UPDATE playback_sessions SET position_ms=?,anchor_ms=? WHERE id=?",
+        )
+        .run(changed.effectiveMs, Date.now(), f.session.id);
+      await runFFmpeg(args, signal, output);
+    },
+  );
+  t.after(() => streaming.stop());
+  const e = f.session.playback!.entry;
+  await assert.rejects(
+    streaming.segment(() => f.owner, f.session.id, e.id, e.startMs),
+    /unavailable/,
+  );
+  assert.equal(executions, 1);
+  assert.equal(f.playback.describe(f.owner, f.session.id).revisionId, target);
+});

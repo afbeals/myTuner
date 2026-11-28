@@ -10,7 +10,7 @@ import { DeletedCollections } from "./Retained";
 import { resourceLink } from "./resource-route";
 import { ResourceLink } from "./ResourceLink";
 import { VideoDetails, DeleteCollection, ReadinessPanel } from "./Inspection";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Workspace } from "./App";
 import type {
   Library,
@@ -61,6 +61,7 @@ export function Artwork({
   );
 }
 export interface Choice {
+  profileAllowed?: boolean;
   label: string;
   selection: Selection;
   sourceId?: string;
@@ -82,6 +83,7 @@ export function choices(
   return [
     ...library.shows.flatMap((show) => [
       {
+        profileAllowed: show.profileAllowed ?? true,
         label: show.title,
         selection: {
           type: "show",
@@ -111,6 +113,7 @@ export function choices(
       })),
     ]),
     ...library.movies.map((movie) => ({
+      profileAllowed: movie.profileAllowed ?? true,
       label: movie.title,
       selection: { type: "media", ids: [movie.id] } as Selection,
       sourceId: movie.sourceId,
@@ -119,6 +122,7 @@ export function choices(
       detail: `${movie.metadata.year ?? ""} · Movie${movie.available ? "" : " · Unavailable"}`,
     })),
     ...library.folders.map((folder) => ({
+      profileAllowed: folder.profileAllowed ?? true,
       label:
         folder.directory ||
         library.sources.find((s) => s.id === folder.sourceId)?.name ||
@@ -135,6 +139,7 @@ export function choices(
       detail: `${folder.directory ? "Folder" : "Source root"} · ${folder.available} available ${folder.available === 1 ? "video" : "videos"}`,
     })),
     ...library.movieCollections.map((c) => ({
+      profileAllowed: c.profileAllowed ?? true,
       label: c.title,
       selection: {
         type: "movieCollection",
@@ -146,6 +151,7 @@ export function choices(
       detail: `Movie collection · ${c.available} available`,
     })),
     ...collections.map((c) => ({
+      profileAllowed: c.profileAllowed ?? true,
       label: c.name,
       selection: { type: "collection", id: c.id } as Selection,
       kind: "collections",
@@ -160,13 +166,22 @@ export function LibraryPage(
     createRequested?: number;
   },
 ) {
+  const scopeIdentity = `${props.account.id}:${props.profileId}:${props.account.role}`;
+  const [allSourcesFor, setAllSourcesFor] = useState<string | null>(null);
+  const allSources =
+    props.account.role === "admin" && allSourcesFor === scopeIdentity;
+  const access = allSources ? "all" : "profile";
+  const profileName =
+    props.profiles.find((profile) => profile.id === props.profileId)?.name ??
+    "this profile";
+  useLayoutEffect(() => setAllSourcesFor(null), [scopeIdentity]);
   const [search, setSearch] = useState(""),
     [query, setQuery] = useState(""),
     [source, setSource] = useState(""),
     [kind, setKind] = useState("all"),
     [dense, setDense] = useState(false),
     [page, setPage] = useState(1),
-    library = useRemoteLibrary(props, query, source, kind, page),
+    library = useRemoteLibrary(props, query, source, kind, page, access),
     [selected, setSelected] = useState<Choice | null>(null),
     [picked, setPicked] = useState<string[]>([]),
     [collect, setCollect] = useState(false),
@@ -197,6 +212,18 @@ export function LibraryPage(
     } | null>(null),
     [error, setError] = useState<unknown>(null);
   const pickedNames = useRef(new Map<string, MediaReference>());
+  useLayoutEffect(() => {
+    setSelected(null);
+    setPicked([]);
+    setDetail(null);
+    setError(null);
+    setSource("");
+    setPage(1);
+    setInspection(null);
+    setMetadataTarget(null);
+    setEditingCollection(null);
+    setDeletion(null);
+  }, [access, scopeIdentity]);
   const manage = canManageProfile(
     props.account,
     props.profiles.find((profile) => profile.id === props.profileId),
@@ -223,7 +250,7 @@ export function LibraryPage(
     if (!trayIdentity) return;
     const controller = new AbortController();
     void api(
-      `/api/profiles/${props.profileId}/selection?limit=1&includeUnavailable=true`,
+      `/api/profiles/${props.profileId}/selection?limit=1&includeUnavailable=true&access=profile`,
       "POST",
       { type: "media", ids: trayIdentity.split(",") },
       controller.signal,
@@ -305,8 +332,13 @@ export function LibraryPage(
     const controller = new AbortController();
     setSelected(null);
     setError(null);
-    void api<{ id: string; name: string; ids: string[] }>(
-      `/api/profiles/${props.profileId}/collections/${target.id}/membership`,
+    void api<{
+      id: string;
+      name: string;
+      ids: string[];
+      profileAllowed?: boolean;
+    }>(
+      `/api/profiles/${props.profileId}/collections/${target.id}/membership?access=${access}`,
       "GET",
       undefined,
       controller.signal,
@@ -315,6 +347,7 @@ export function LibraryPage(
         if (!controller.signal.aborted)
           setSelected({
             label: c.name,
+            profileAllowed: c.profileAllowed ?? true,
             selection: { type: "collection", id: c.id },
             kind: "collections",
             detail: library.collections.some((item) => item.id === c.id)
@@ -333,7 +366,7 @@ export function LibraryPage(
           );
       });
     return () => controller.abort();
-  }, [props.resource?.id, props.profileId, linkedVersion]);
+  }, [props.resource?.id, access, props.profileId, linkedVersion]);
   useEffect(() => {
     setSelected(null);
     setPicked([]);
@@ -356,7 +389,7 @@ export function LibraryPage(
     if (!selected) return;
     const c = new AbortController();
     void api<{ items: Media[]; total: number }>(
-      `/api/profiles/${props.profileId}/selection?includeUnavailable=true&offset=${detailOffset}&limit=50`,
+      `/api/profiles/${props.profileId}/selection?includeUnavailable=true&offset=${detailOffset}&limit=50&access=${access}`,
       "POST",
       selected.selection,
       c.signal,
@@ -378,7 +411,7 @@ export function LibraryPage(
         }
       });
     return () => c.abort();
-  }, [selected, props.profileId, detailVersion, detailOffset]);
+  }, [selected, props.profileId, detailVersion, detailOffset, access]);
   const list = library.data
     ? choices(library.data, library.collections, props.profileId).filter(
         (c) =>
@@ -586,6 +619,25 @@ export function LibraryPage(
           )}
         </section>
       )}
+      {props.account.role === "admin" && (
+        <div className="actions">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={allSources}
+              onChange={(event) =>
+                setAllSourcesFor(event.target.checked ? scopeIdentity : null)
+              }
+            />
+            Show all sources
+          </label>
+          <span>
+            {allSources
+              ? `Admin inspection. ${profileName}’s permissions are unchanged.`
+              : `Showing ${profileName}’s allowed library.`}
+          </span>
+        </div>
+      )}
       <div className="tabs" aria-label="Browse library by">
         <button
           className={browseMode === "titles" ? "selected" : "secondary"}
@@ -604,6 +656,9 @@ export function LibraryPage(
       </div>
       {browseMode === "paths" && (
         <CatalogBrowser
+          key={`${scopeIdentity}:${access}`}
+          access={access}
+          inspectionOnly={allSources}
           profileId={props.profileId}
           version={props.version}
           sources={library.data?.sources ?? []}
@@ -766,6 +821,12 @@ export function LibraryPage(
                     <div>
                       <h2>{item.label}</h2>
                       <p>{item.detail}</p>
+                      {allSources && item.profileAllowed === false && (
+                        <span className="badge">
+                          Includes videos outside {profileName}’s allowed
+                          library
+                        </span>
+                      )}
                       <button
                         className="secondary"
                         onClick={() => setSelected(item)}
@@ -815,6 +876,12 @@ export function LibraryPage(
                 <button
                   disabled={
                     !picked.length ||
+                    picked.some((id) =>
+                      detail?.some(
+                        (item) =>
+                          item.id === id && item.profileAllowed === false,
+                      ),
+                    ) ||
                     (picked.some((id) => !tray.has(id)) &&
                       tray.size + picked.filter((id) => !tray.has(id)).length >
                         5000)
@@ -843,6 +910,14 @@ export function LibraryPage(
           }
         >
           <p>{selected.detail}</p>
+          {selected.profileAllowed === false && (
+            <p className="notice" role="status">
+              Inspection only: this selection includes videos outside{" "}
+              {profileName}’s allowed library. Update the profile’s allowed
+              library before using the whole selection.{" "}
+              <a href="#profiles">Manage profiles</a>
+            </p>
+          )}
           <SourceInspectionNotice
             profileId={props.profileId}
             sourceIds={sourceIds}
@@ -861,6 +936,7 @@ export function LibraryPage(
               </p>
             )}
           {props.account.role === "admin" &&
+            selected.profileAllowed !== false &&
             (selected.selection.type === "show" ||
               (selected.selection.type === "media" &&
                 selected.selection.ids.length === 1)) && (
@@ -881,17 +957,19 @@ export function LibraryPage(
                 Edit information
               </button>
             )}
-          {manage && selected.selection.type === "collection" && (
-            <button
-              className="secondary"
-              onClick={() => {
-                if (selected.selection.type === "collection")
-                  setEditingCollection(selected.selection.id);
-              }}
-            >
-              Edit collection
-            </button>
-          )}
+          {manage &&
+            selected.profileAllowed !== false &&
+            selected.selection.type === "collection" && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  if (selected.selection.type === "collection")
+                    setEditingCollection(selected.selection.id);
+                }}
+              >
+                Edit collection
+              </button>
+            )}
           {selected.selection.type === "collection" && (
             <ResourceLink
               kind="collection"
@@ -977,10 +1055,16 @@ export function LibraryPage(
               <button
                 type="button"
                 className="secondary"
-                disabled={!detail?.some((item) => item.available)}
+                disabled={
+                  !detail?.some(
+                    (item) => item.available && item.profileAllowed !== false,
+                  )
+                }
                 onClick={() => {
                   const available =
-                    detail?.filter((item) => item.available) ?? [];
+                    detail?.filter(
+                      (item) => item.available && item.profileAllowed !== false,
+                    ) ?? [];
                   available.forEach((item) =>
                     pickedNames.current.set(item.id, item),
                   );
@@ -1035,7 +1119,9 @@ export function LibraryPage(
                             type="checkbox"
                             aria-label={`Select ${referenceLabel(item)}`}
                             checked={picked.includes(item.id)}
-                            disabled={!item.available}
+                            disabled={
+                              !item.available || item.profileAllowed === false
+                            }
                             onChange={(e) => {
                               if (e.target.checked)
                                 pickedNames.current.set(item.id, item);
@@ -1131,7 +1217,12 @@ export function LibraryPage(
             <div className="actions">
               <button
                 className="secondary"
-                disabled={!detail?.some((item) => item.available)}
+                disabled={
+                  selected.profileAllowed === false ||
+                  !detail?.some(
+                    (item) => item.available && item.profileAllowed !== false,
+                  )
+                }
                 onClick={() => {
                   props.onUse(selected.selection);
                   setSelected(null);
@@ -1146,21 +1237,22 @@ export function LibraryPage(
                 in a channel
               </button>
 
-              {selected.selection.type === "collection" && (
-                <button
-                  className="secondary danger"
-                  onClick={() => {
-                    if (selected.selection.type === "collection")
-                      setDeletion({
-                        id: selected.selection.id,
-                        name: selected.label,
-                        context: selectionContext,
-                      });
-                  }}
-                >
-                  Delete collection
-                </button>
-              )}
+              {selected.profileAllowed !== false &&
+                selected.selection.type === "collection" && (
+                  <button
+                    className="secondary danger"
+                    onClick={() => {
+                      if (selected.selection.type === "collection")
+                        setDeletion({
+                          id: selected.selection.id,
+                          name: selected.label,
+                          context: selectionContext,
+                        });
+                    }}
+                  >
+                    Delete collection
+                  </button>
+                )}
             </div>
           )}
           {props.account.role === "admin" && (
@@ -1252,6 +1344,7 @@ function useRemoteLibrary(
   source = "",
   kind = "all",
   page = 1,
+  access: "profile" | "all" = "profile",
 ) {
   const params = new URLSearchParams({
     search,
@@ -1259,6 +1352,8 @@ function useRemoteLibrary(
     offset: String((page - 1) * 24),
     limit: "24",
     titleOnly: "true",
+    topLevel: "true",
+    access,
   });
   if (source) params.set("sourceId", source);
   const library = useCatalogPage<Library>(

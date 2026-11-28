@@ -194,6 +194,7 @@ export function ChannelWizard(
           ownerAccountId: props.account.id,
           shortName: details.shortName || details.name.slice(0, 12),
           shortNameOverride: details.shortName || null,
+          hasProgramming: config.groups.length > 0,
         });
       }
     } catch (error) {
@@ -233,8 +234,7 @@ export function ChannelWizard(
                 !manage ||
                 (step >= 2 && !rulesValid) ||
                 copy.loading ||
-                Boolean(copy.error) ||
-                (step === 1 && !config.groups.length)
+                Boolean(copy.error)
               }
             >
               Next
@@ -384,6 +384,12 @@ export function ChannelWizard(
                 Groups rotate independently. Whole shows and folders include
                 newly scanned videos in future schedules.
               </p>
+              {!config.groups.length && (
+                <p role="status">
+                  No content groups. You can create an empty channel and add
+                  programming later. No videos or commercials will be scheduled.
+                </p>
+              )}
               {config.groups.map((group, index) => (
                 <section className="settings-section" key={group.id}>
                   <h4>Content group {index + 1}</h4>
@@ -538,9 +544,10 @@ export function ChannelWizard(
                 ))}
               </ul>
               <p>
-                Generate a preview, then create the channel and publish its live
-                schedule. Previewing creates no channel, subscriptions or saved
-                schedule.
+                {config.groups.length
+                  ? "Generate a preview, then create the channel and publish its live schedule."
+                  : "Generate an empty preview, then create the channel with no programming. You can add content later."}{" "}
+                Previewing creates no channel, subscriptions or saved schedule.
               </p>
               {preview && (
                 <>

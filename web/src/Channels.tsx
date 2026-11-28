@@ -85,10 +85,6 @@ export function ChannelsPage(
     [search, setSearch] = useState(""),
     [searchText, setSearchText] = useState(""),
     [cardOffset, setCardOffset] = useState(0),
-    [deleteImpact, setDeleteImpact] = useState<{
-      canDelete: boolean;
-      counts: Record<string, number>;
-    } | null>(null),
     [notice, setNotice] = useState(""),
     [filter, setFilter] = useState("all"),
     [addedToGuides, setAddedToGuides] = useState<Set<string>>(() => new Set()),
@@ -117,7 +113,6 @@ export function ChannelsPage(
           ),
       );
   }, [guide.data, props.profileId]);
-  useEffect(() => setDeleteImpact(null), [selection?.id]);
 
   const rows = (
     Array.isArray(list.data) ? list.data : (list.data?.items ?? [])
@@ -574,7 +569,7 @@ export function ChannelsPage(
                         ? "Published. The guide is loading its scheduled programming."
                         : `Published. Add this channel to ${profileName}’s guide to watch.`
                       : selected.hasProgramming === false
-                        ? "No programming published yet. Add content and publish a preview."
+                        ? "No programming scheduled. Add content when ready."
                         : `Add this channel to ${profileName}’s guide to see its programming when published.`}
                 </p>
               )}
@@ -661,15 +656,30 @@ export function ChannelsPage(
                       const impact = await api<{
                         revision: string;
                         canDelete: boolean;
+                        name: string;
                         counts: Record<string, number>;
                       }>(`/api/channels/${selected.id}/dependencies`);
-                      setDeleteImpact(impact);
-                      if (!impact.canDelete) return;
+                      if (!impact.canDelete)
+                        throw new Error(
+                          "This channel is no longer archived. Refresh your channels before deleting it.",
+                        );
+                      const labels: Record<string, string> = {
+                        schedules: "schedule revisions",
+                        entries: "scheduled intervals",
+                        playback: "playback sessions",
+                        reports: "problem reports",
+                        history: "playback history records",
+                        subscriptions: "subscriptions",
+                      };
+                      const summary = Object.entries(impact.counts)
+                        .filter(([, count]) => count > 0)
+                        .map(([key, count]) => `${count} ${labels[key] ?? key}`)
+                        .join(", ");
                       if (
                         !(await confirmAction(
-                          `Permanently delete archived channel “${selected.name}”? This removes its remaining settings. Original media is kept.`,
+                          `Permanently delete archived channel “${impact.name}”? This removes its settings, content groups and programming${summary ? `, including ${summary}` : ""}. Related playback history and problem reports are removed. This cannot be undone. Original videos, subtitles, metadata files, collections and generated files stay on disk.`,
                           {
-                            title: `Delete ${selected.name} permanently?`,
+                            title: `Delete ${impact.name} permanently?`,
                             label: "Delete channel",
                           },
                         ))
@@ -689,17 +699,6 @@ export function ChannelsPage(
                   </Action>
                 )}
               </div>
-              {deleteImpact && !deleteImpact.canDelete && (
-                <p role="alert" className="notice">
-                  Permanent deletion is blocked by{" "}
-                  {Object.entries(deleteImpact.counts)
-                    .filter(([, count]) => count)
-                    .map(([name, count]) => `${count} ${name}`)
-                    .join(", ")}
-                  . Retained history is kept until its normal retention process
-                  removes it.
-                </p>
-              )}
             </>
           ) : (
             <Empty title="Choose a channel">
@@ -722,9 +721,12 @@ export function ChannelsPage(
             setCreating(false);
             setCopySource(null);
             setSelected(channel);
-            setPublishedIds((old) => new Set([...old, channel.id]));
+            if (channel.hasProgramming)
+              setPublishedIds((old) => new Set([...old, channel.id]));
             setNotice(
-              `Channel created and published: ${channel.name}. Add it to a profile guide when ready.`,
+              channel.hasProgramming
+                ? `Channel created and published: ${channel.name}. Add it to a profile guide when ready.`
+                : `Empty channel created: ${channel.name}. Add programming when ready.`,
             );
             props.onSelectionUsed();
             refresh();
@@ -746,8 +748,13 @@ export function ChannelsPage(
             setCopiedConfig(null);
             props.onSelectionUsed();
           }}
-          onSaved={() => {
-            setPublishedIds((old) => new Set([...old, selected.id]));
+          onSaved={(hasProgramming) => {
+            setPublishedIds((old) => {
+              const next = new Set(old);
+              if (hasProgramming) next.add(selected.id);
+              else next.delete(selected.id);
+              return next;
+            });
             refresh();
           }}
         />
@@ -903,7 +910,7 @@ function ProgramEditor(
     initialSelection: Selection | null;
     onClose: () => void;
     onDetails: () => void;
-    onSaved: () => void;
+    onSaved: (hasProgramming: boolean) => void;
     draftConfig?: Programming;
   },
 ) {
@@ -1014,7 +1021,16 @@ function ProgramEditor(
   );
   const update = (next: Programming) => {
     configRevision.current++;
-    setConfig(next);
+    setConfig({
+      ...next,
+      ...(next.checkpointActions
+        ? {
+            checkpointActions: next.checkpointActions.filter((action) =>
+              next.groups.some((group) => group.id === action.groupId),
+            ),
+          }
+        : {}),
+    });
     setDirty(true);
     setPreview(null);
     setSaved(null);
@@ -1061,7 +1077,7 @@ function ProgramEditor(
         const { checkpointActions: _, ...published } = config;
         setConfig(published);
       }
-      props.onSaved();
+      props.onSaved(config.groups.length > 0);
     } finally {
       setPublishing(false);
     }
@@ -1087,7 +1103,6 @@ function ProgramEditor(
             {saved ? null : tab === "preview" ? (
               <Action
                 disabled={
-                  !config.groups.length ||
                   !preview ||
                   !rulesValid ||
                   noAvailableGroups ||
@@ -1097,16 +1112,14 @@ function ProgramEditor(
                 task={publish}
                 onError={setSubmissionError}
               >
-                Publish programming
+                {config.groups.length
+                  ? "Publish programming"
+                  : "Save empty programming"}
               </Action>
             ) : (
               <button
                 disabled={
-                  !config.groups.length ||
-                  publishing ||
-                  !rulesValid ||
-                  data.loading ||
-                  reloading
+                  publishing || !rulesValid || data.loading || reloading
                 }
                 onClick={() =>
                   setTab(tab === "content" ? "commercials" : "preview")
@@ -1279,6 +1292,13 @@ function ProgramEditor(
               <button className="secondary" onClick={props.onDetails}>
                 Edit details
               </button>
+              {!config.groups.length && (
+                <p role="status">
+                  No content groups. You can save this channel empty and add
+                  programming later. Any current program and its breaks finish
+                  first; no new videos or commercials will be scheduled.
+                </p>
+              )}
               {config.groups.map((g, i) => (
                 <section className="panel group" key={g.id}>
                   <h3>Content group {i + 1}</h3>
@@ -1495,14 +1515,11 @@ function ProgramEditor(
                       setPreviewEffective(result.effectiveMs);
                     }
                   }}
-                  disabled={
-                    !config.groups.length ||
-                    conflict ||
-                    !rulesValid ||
-                    noAvailableGroups
-                  }
+                  disabled={conflict || !rulesValid || noAvailableGroups}
                 >
-                  Generate two-hour preview
+                  {config.groups.length
+                    ? "Generate two-hour preview"
+                    : "Review empty programming"}
                 </Action>
               )}
               {preview && (
@@ -1512,6 +1529,12 @@ function ProgramEditor(
                     {new Date(previewEffective!).toLocaleString()} after the
                     current program and its breaks.
                   </p>
+                  {!config.groups.length && (
+                    <p role="status">
+                      No videos or commercials are scheduled after this change
+                      takes effect. The channel and its settings are kept.
+                    </p>
+                  )}
                   <Schedule
                     entries={preview}
                     sources={library.data?.sources ?? []}

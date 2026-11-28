@@ -220,6 +220,39 @@ export function requireAdmin(account: Account): void {
   invariant(account.role === "admin", 403, "Administrator access required");
 }
 const programmingProfiles = new WeakMap<Account, string>();
+const profileMediaScopes = new WeakMap<Account, string>();
+export function canBypassMediaGrants(
+  account: Account,
+  profileId: string,
+): boolean {
+  return (
+    account.role === "admin" &&
+    programmingProfiles.get(account) !== profileId &&
+    profileMediaScopes.get(account) !== profileId
+  );
+}
+export function profileLibraryActor(
+  store: Store,
+  account: Account,
+  profileId: string,
+  access: "profile" | "all",
+): Account {
+  requireProfile(store, account, profileId);
+  if (access === "all") {
+    requireAdmin(account);
+    return account;
+  }
+  const scoped = { ...account };
+  if (account.sessionHash)
+    Object.defineProperty(scoped, "sessionHash", {
+      value: account.sessionHash,
+      enumerable: false,
+    });
+  const kind = sessionKinds.get(account);
+  if (kind) sessionKinds.set(scoped, kind);
+  profileMediaScopes.set(scoped, profileId);
+  return scoped;
+}
 // The schedule worker evaluates its author's current management/source grants. A viewing PIN is session-local and must not expire a published broadcast.
 export function programmingActor(
   store: Store,
@@ -314,7 +347,13 @@ export function createMediaAuthorizer(
   profileId: string,
 ): (media: Pick<Media, "source_id" | "relative_path">) => boolean {
   requireProfile(store, account, profileId);
-  if (account.role === "admin") return () => true;
+  if (canBypassMediaGrants(account, profileId)) return () => true;
+  return createProfileMediaAuthorizer(store, profileId);
+}
+export function createProfileMediaAuthorizer(
+  store: Store,
+  profileId: string,
+): (media: Pick<Media, "source_id" | "relative_path">) => boolean {
   const grants = new Map<string, string[]>();
   for (const row of store.db
     .prepare("SELECT source_id,subtree FROM source_grants WHERE profile_id=?")
@@ -336,7 +375,7 @@ export function canReadMedia(
   media: Media,
 ): boolean {
   requireProfile(store, account, profileId);
-  if (account.role === "admin") return true;
+  if (canBypassMediaGrants(account, profileId)) return true;
   return store.db
     .prepare(
       "SELECT subtree FROM source_grants WHERE profile_id=? AND source_id=?",
@@ -367,7 +406,11 @@ export function requireChannelMedia(
   account: Account,
   profileId: string,
   channel: Channel,
-  context: { revisionId?: string; positionMs?: number } = {},
+  context: {
+    revisionId?: string;
+    positionMs?: number;
+    untilMs?: number | undefined;
+  } = {},
 ): void {
   requireProfile(store, account, profileId);
   const revisionId =
@@ -380,10 +423,15 @@ export function requireChannelMedia(
   // Administrators have access to every source, including unavailable media.
   if (account.role === "admin") return;
   const membership = revisionId
-    ? "JOIN schedule_entries e ON e.media_id=m.id WHERE e.revision_id=? AND e.end_ms>?"
+    ? "JOIN schedule_entries e ON e.media_id=m.id WHERE e.revision_id=? AND e.end_ms>? AND e.start_ms<?"
     : "JOIN channel_items ci ON ci.media_id=m.id WHERE ci.channel_id=?";
   const parameters = revisionId
-    ? [revisionId, context.positionMs ?? Date.now(), profileId]
+    ? [
+        revisionId,
+        context.positionMs ?? Date.now(),
+        context.untilMs ?? Number.MAX_SAFE_INTEGER,
+        profileId,
+      ]
     : [channel.id, profileId];
   const denied = store.db
     .prepare(

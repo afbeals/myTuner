@@ -4,7 +4,7 @@
 
 myTuner builds a personal TV network over files that already exist on Unraid. It owns the library catalog, permissions, channel programming, continuous timelines and playback APIs. A channel advances by wall-clock time even when nobody watches. Actual video conversion runs only on demand.
 
-Version 0.3.0 (schema 21) implements one TypeScript server, its SQLite database, command-line operational tools, a React browser manager/player and a Kotlin/Media3 TV client. Docker includes the server and built browser; the native APK is installed separately. The owner approved the Figma designs before product UI implementation. See [applications](APPLICATIONS.md) for client scope and [verification](VERIFICATION.md) for acceptance limits.
+Version 0.3.1 (schema 22) implements one TypeScript server, its SQLite database, command-line operational tools, a React browser manager/player and a Kotlin/Media3 TV client. Docker includes the server and built browser; the native APK is installed separately. The owner approved the Figma designs before product UI implementation. See [applications](APPLICATIONS.md) for client scope and [verification](VERIFICATION.md) for acceptance limits.
 
 ## System diagram
 

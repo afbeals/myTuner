@@ -1,3 +1,4 @@
+import { stageChannelPlaybackUpdates } from "./playback-updates.js";
 import { setImmediate } from "node:timers/promises";
 import { compareClips } from "./scheduler.js";
 import type { Group } from "./scheduler.js";
@@ -60,6 +61,8 @@ export class ProgrammingService {
     retainedDisabled: readonly string[] = [],
   ) {
     account = programmingActor(this.store, account, config.profileId);
+    // An intentionally empty channel has no media to resolve, including old ad pools.
+    if (!config.groups.length) return { groups: [], commercials: [] };
     const toClip = (item: Media): Clip => {
       const data = metadata(item);
       return {
@@ -219,8 +222,10 @@ export class ProgrammingService {
     input: RotationState,
     groups: Group[],
   ): RotationState {
-    const state = structuredClone(input);
-    if (!old?.config_json)
+    const state = config.groups.length
+      ? structuredClone(input)
+      : initialState(config.seed);
+    if (!config.groups.length || !old?.config_json)
       return this.applyCheckpointActions(config, state, groups);
     const previous = programmingSchema.parse(JSON.parse(old.config_json));
     const identity = (
@@ -368,12 +373,13 @@ export class ProgrammingService {
     }
     // Preview catches up in memory so inspecting an idle channel never writes a schedule.
     if (old.config_json) {
+      const previous = programmingSchema.parse(JSON.parse(old.config_json));
+      if (!previous.groups.length) return context;
       const author = this.store.db
         .prepare(
           "SELECT id,username,role,disabled FROM accounts WHERE id=? AND disabled=0",
         )
         .get(old.author_account_id!) as Account | undefined;
-      const previous = programmingSchema.parse(JSON.parse(old.config_json));
       let material: ReturnType<ProgrammingService["material"]>;
       try {
         invariant(author, 409, "Programming author is unavailable");
@@ -568,6 +574,7 @@ export class ProgrammingService {
           "INSERT INTO rotation_state(channel_id,state_json) VALUES(?,?) ON CONFLICT(channel_id) DO UPDATE SET state_json=excluded.state_json",
         )
         .run(channelId, JSON.stringify(result.state));
+      stageChannelPlaybackUpdates(this.store, channelId, revisionId, now);
     });
     return { revisionId, effectiveMs: boundary, entries: result.entries };
   }
@@ -613,6 +620,9 @@ export class ProgrammingService {
           .get(revisionId, channelId) as unknown as Revision | undefined)
       : this.active(channelId);
     if (!revision?.config_json) return; // Legacy explicit-ID schedules have no recurring rule.
+    const config = programmingSchema.parse(JSON.parse(revision.config_json));
+    // Empty programming is a saved state, not work for the catch-up loop.
+    if (!config.groups.length) return;
     let end = Number(
       this.store.db
         .prepare(
@@ -627,12 +637,11 @@ export class ProgrammingService {
       )
       .get(revision.author_account_id!) as Account | undefined;
     invariant(account, 409, "Programming author is unavailable");
-    const config = programmingSchema.parse(JSON.parse(revision.config_json)),
-      initialMaterial = this.material(
-        account,
-        config,
-        config.disabledCommercialIds,
-      );
+    const initialMaterial = this.material(
+      account,
+      config,
+      config.disabledCommercialIds,
+    );
     let material = initialMaterial;
     let contentRevision = Number(
       this.store.db

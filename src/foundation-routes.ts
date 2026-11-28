@@ -35,6 +35,7 @@ import {
   canReadMedia,
   createMediaAuthorizer,
   programmingActor,
+  profileLibraryActor,
 } from "./security.js";
 import { ProgrammingService } from "./programming.js";
 export function registerFoundationRoutes(
@@ -147,6 +148,8 @@ export function registerFoundationRoutes(
         search: z.string().trim().max(200).default(""),
         sourceId: uuid.optional(),
         titleOnly: z.enum(["true", "false"]).default("false"),
+        topLevel: z.enum(["true", "false"]).default("false"),
+        access: z.enum(["profile", "all"]).default("profile"),
         kind: z
           .enum(["all", "shows", "movies", "videos", "collections"])
           .default("all"),
@@ -154,12 +157,12 @@ export function registerFoundationRoutes(
         limit: z.coerce.number().int().min(1).max(100).optional(),
       })
       .parse(request.query);
-    if (input.limit === undefined && !catalog)
-      return browseLibrary(store, account, profileId, input.search);
+
     const page = {
       ...input,
       limit: input.limit ?? 24,
       titleOnly: input.titleOnly === "true",
+      topLevel: input.topLevel === "true",
     };
     return catalog
       ? readCatalogRequest(
@@ -182,6 +185,7 @@ export function registerFoundationRoutes(
       const input = z
         .object({
           search: z.string().trim().max(200).default(""),
+          access: z.enum(["profile", "all"]).default("profile"),
           titleOnly: z
             .enum(["true", "false"])
             .default("false")
@@ -248,6 +252,7 @@ export function registerFoundationRoutes(
     const query = z
       .object({
         includeUnavailable: z.enum(["true", "false"]).default("false"),
+        access: z.enum(["profile", "all"]).optional(),
         offset: z.coerce.number().int().min(0).max(1000000).default(0),
         limit: z.coerce.number().int().min(1).max(100).default(50),
         search: z.string().trim().max(200).default(""),
@@ -287,6 +292,7 @@ export function registerFoundationRoutes(
         recursive: z.enum(["true", "false"]).default("false"),
         mode: z.enum(["folders", "files"]).default("folders"),
         includeCommercials: z.enum(["true", "false"]).default("true"),
+        access: z.enum(["profile", "all"]).default("profile"),
       })
       .parse(request.query);
     const query = {
@@ -339,11 +345,18 @@ export function registerFoundationRoutes(
       const { profileId, collectionId } = z
         .object({ profileId: uuid, collectionId: uuid })
         .parse(request.params);
+      const { access } = z
+        .object({ access: z.enum(["profile", "all"]).optional() })
+        .parse(request.query);
+      const account = actor(request);
       return collectionMembership(
         store,
-        actor(request),
+        access
+          ? profileLibraryActor(store, account, profileId, access)
+          : account,
         profileId,
         collectionId,
+        Boolean(access),
       );
     },
   );
@@ -617,7 +630,7 @@ export function registerFoundationRoutes(
     return {
       items: store.db
         .prepare(
-          "SELECT id,name,description,details_revision,owner_account_id AS ownerAccountId,visibility,archived,short_name,EXISTS(SELECT 1 FROM active_schedules a WHERE a.channel_id=channels.id) AS has_programming FROM channels ORDER BY name,id",
+          "SELECT id,name,description,details_revision,owner_account_id AS ownerAccountId,visibility,archived,short_name,EXISTS(SELECT 1 FROM active_schedules a JOIN schedule_revisions r ON r.id=a.revision_id WHERE a.channel_id=channels.id AND (r.config_json IS NULL OR json_array_length(r.config_json,'$.groups')>0)) AS has_programming FROM channels ORDER BY name,id",
         )
         .all(),
     };
